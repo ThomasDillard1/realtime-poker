@@ -333,11 +333,3 @@ waiting → pre-flop → flop → turn → river → showdown → complete
 - **Server enforces**: Can't skip phases, can't deal cards out of order.
 
 ---
-
-## Next Steps
-
-Would you like me to:
-1. **Scaffold the backend** (Express + WebSocket server with GameManager)?
-2. **Implement the core game engine** (hand evaluation, turn logic)?
-3. **Build the React frontend** (room lobby + game table UI)?
-4. **Create the full type definitions** as actual `.ts` files?
