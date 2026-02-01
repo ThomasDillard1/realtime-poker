@@ -1,6 +1,7 @@
 import { WebSocketServer as WSServer, WebSocket } from 'ws';
-import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO } from '../types/index.js';
+import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO, GameStateDTO, Room } from '../types/index.js';
 import { gameManager } from '../game/GameManager.js';
+import { startGame, getValidActions } from '../game/GameEngine.js';
 
 interface ClientConnection {
   ws: WebSocket;
@@ -147,8 +148,40 @@ export class WebSocketHandler {
     }
   }
 
-  private handleStartGame(_ws: WebSocket, _payload: { roomId: string }): void {
-    // TODO: Implement game start logic
+  private handleStartGame(ws: WebSocket, payload: { roomId: string }): void {
+    const room = gameManager.getRoom(payload.roomId);
+    if (!room) {
+      this.sendError(ws, 'Room not found');
+      return;
+    }
+
+    if (room.players.size < 2) {
+      this.sendError(ws, 'Need at least 2 players to start');
+      return;
+    }
+
+    if (room.gameState) {
+      this.sendError(ws, 'Game already in progress');
+      return;
+    }
+
+    // Initialize game state
+    room.gameState = startGame(room);
+
+    // Send personalized game state to each player
+    this.broadcastGameState(room);
+
+    // Send action-required to current player
+    const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
+    const currentPlayer = room.players.get(currentPlayerId)!;
+    const validActions = getValidActions(room.gameState, currentPlayer);
+
+    this.broadcastToRoom(room.id, {
+      type: 'action-required',
+      payload: { playerId: currentPlayerId, validActions },
+    });
+
+    console.log(`[${new Date().toISOString()}] Game started in room ${room.id}`);
   }
 
   private handlePlayerAction(_ws: WebSocket, _payload: { roomId: string; playerId: string; action: unknown }): void {
@@ -211,5 +244,41 @@ export class WebSocketHandler {
         this.send(client.ws, message);
       }
     }
+  }
+
+  private toGameStateDTO(room: Room, forPlayerId: string): GameStateDTO {
+    const gameState = room.gameState!;
+    const currentPlayerId = gameState.playerOrder[gameState.currentPlayerIndex];
+    const player = room.players.get(forPlayerId);
+
+    return {
+      roomId: room.id,
+      phase: gameState.phase,
+      communityCards: gameState.communityCards,
+      pot: gameState.pot,
+      currentBet: gameState.currentBet,
+      currentPlayerId,
+      players: Array.from(room.players.values()).map((p) => this.toPlayerDTO(p)),
+      myCards: player?.hand,
+    };
+  }
+
+  private broadcastGameState(room: Room): void {
+    let sentCount = 0;
+    console.log(`[${new Date().toISOString()}] Broadcasting game state to room ${room.id}, total clients: ${this.clients.size}`);
+
+    for (const [, client] of this.clients) {
+      console.log(`  Client: playerId=${client.playerId}, roomId=${client.roomId}, match=${client.roomId === room.id}`);
+      if (client.roomId === room.id && client.playerId) {
+        const gameStateDTO = this.toGameStateDTO(room, client.playerId);
+        this.send(client.ws, {
+          type: 'game-started',
+          payload: { gameState: gameStateDTO },
+        });
+        sentCount++;
+      }
+    }
+
+    console.log(`[${new Date().toISOString()}] Sent game-started to ${sentCount} clients`);
   }
 }
