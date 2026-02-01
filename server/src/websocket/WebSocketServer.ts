@@ -19,7 +19,7 @@ export class WebSocketHandler {
 
   private setupServer(): void {
     this.wss.on('connection', (ws: WebSocket) => {
-      console.log('Client connected');
+      console.log(`[${new Date().toISOString()}] Client connected`);
       this.clients.set(ws, { ws, playerId: null, roomId: null });
 
       ws.on('message', (data: Buffer) => {
@@ -41,7 +41,7 @@ export class WebSocketHandler {
           });
         }
         this.clients.delete(ws);
-        console.log('Client disconnected');
+        console.log(`[${new Date().toISOString()}] Client disconnected`);
       });
     });
 
@@ -133,16 +133,18 @@ export class WebSocketHandler {
   private handleLeaveRoom(ws: WebSocket, payload: { roomId: string; playerId: string }): void {
     gameManager.removePlayerFromRoom(payload.roomId, payload.playerId);
 
+    // Broadcast to room before clearing client's roomId
+    this.broadcastToRoom(payload.roomId, {
+      type: 'player-left',
+      payload: { roomId: payload.roomId, playerId: payload.playerId },
+    });
+
+    // Now clear the client's association
     const client = this.clients.get(ws);
     if (client) {
       client.playerId = null;
       client.roomId = null;
     }
-
-    this.broadcastToRoom(payload.roomId, {
-      type: 'player-left',
-      payload: { roomId: payload.roomId, playerId: payload.playerId },
-    });
   }
 
   private handleStartGame(_ws: WebSocket, _payload: { roomId: string }): void {
