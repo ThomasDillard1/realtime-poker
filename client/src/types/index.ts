@@ -63,7 +63,8 @@ export type ClientMessage =
   | { type: 'leave-room'; payload: { roomId: string; playerId: string } }
   | { type: 'start-game'; payload: { roomId: string } }
   | { type: 'start-next-hand'; payload: { roomId: string } }
-  | { type: 'player-action'; payload: { roomId: string; playerId: string; action: PlayerAction } };
+  | { type: 'player-action'; payload: { roomId: string; playerId: string; action: PlayerAction } }
+  | { type: 'get-rooms'; payload: Record<string, never> };
 
 // ============================================
 // SERVER → CLIENT MESSAGES
@@ -78,7 +79,14 @@ export type ServerMessage =
   | { type: 'game-updated'; payload: { gameState: GameStateDTO } }
   | { type: 'action-required'; payload: { playerId: string; validActions: ActionType[] } }
   | { type: 'hand-complete'; payload: HandCompletePayload }
+  | { type: 'game-over'; payload: GameOverPayload }
+  | { type: 'rooms-list'; payload: { rooms: RoomDTO[] } }
   | { type: 'error'; payload: { message: string } };
+
+export interface GameOverPayload {
+  winner: PlayerDTO;
+  players: PlayerDTO[];  // Final standings
+}
 
 // ============================================
 // DATA TRANSFER OBJECTS (DTOs)

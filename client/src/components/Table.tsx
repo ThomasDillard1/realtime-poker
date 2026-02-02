@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { GameStateDTO, ActionType, ClientMessage, Card, HandCompletePayload, ShowdownPlayerDTO } from '../types';
+import { GameStateDTO, ActionType, ClientMessage, Card, HandCompletePayload, ShowdownPlayerDTO, GameOverPayload } from '../types';
 
 interface TableProps {
   gameState: GameStateDTO | null;
   playerId: string;
+  roomId: string;
   validActions: ActionType[];
   handComplete: HandCompletePayload | null;
+  gameOver: GameOverPayload | null;
   onSend: (message: ClientMessage) => void;
 }
 
@@ -31,8 +33,20 @@ function formatCards(cards: Card[]): string {
   return cards.map(c => `${c.rank}${c.suit[0].toUpperCase()}`).join(' ');
 }
 
-export function Table({ gameState, playerId, validActions, handComplete, onSend }: TableProps) {
+export function Table({ gameState, playerId, roomId, validActions, handComplete, gameOver, onSend }: TableProps) {
   const [betAmount, setBetAmount] = useState<number>(0);
+
+  // If game is over, show the game over screen
+  if (gameOver) {
+    return (
+      <GameOverView
+        gameOver={gameOver}
+        playerId={playerId}
+        roomId={roomId}
+        onSend={onSend}
+      />
+    );
+  }
 
   // If hand is complete, show the showdown screen
   if (handComplete) {
@@ -323,6 +337,92 @@ function ShowdownView({ handComplete, playerId }: ShowdownViewProps) {
         ) : (
           <span>Starting next hand...</span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Game Over display component
+interface GameOverViewProps {
+  gameOver: GameOverPayload;
+  playerId: string;
+  roomId: string;
+  onSend: (message: ClientMessage) => void;
+}
+
+function GameOverView({ gameOver, playerId, roomId, onSend }: GameOverViewProps) {
+  const { winner, players } = gameOver;
+  const isWinner = winner.id === playerId;
+
+  const handleLeaveRoom = () => {
+    onSend({
+      type: 'leave-room',
+      payload: { roomId, playerId },
+    });
+  };
+
+  return (
+    <div>
+      <h2>Game Over!</h2>
+
+      {/* Winner announcement */}
+      <div style={{
+        backgroundColor: isWinner ? '#e8f5e9' : '#fff8e1',
+        padding: '20px',
+        borderRadius: '8px',
+        margin: '10px 0',
+        border: `2px solid ${isWinner ? '#4caf50' : '#ffc107'}`,
+        textAlign: 'center',
+      }}>
+        <h3 style={{ margin: '0 0 10px 0', color: isWinner ? '#2e7d32' : '#f57f17', fontSize: '24px' }}>
+          {isWinner ? '🏆 You Won the Game! 🏆' : `${winner.name} Wins!`}
+        </h3>
+        <p style={{ fontSize: '18px' }}>
+          Final chips: <strong>{winner.chips}</strong>
+        </p>
+      </div>
+
+      {/* Final standings */}
+      <div>
+        <h3>Final Standings</h3>
+        <ol style={{ fontSize: '16px' }}>
+          {players.map((p, index) => (
+            <li
+              key={p.id}
+              style={{
+                padding: '8px',
+                marginBottom: '4px',
+                backgroundColor: index === 0 ? '#fff9c4' : p.id === playerId ? '#e3f2fd' : 'transparent',
+                borderRadius: '4px',
+              }}
+            >
+              <strong>{p.name}</strong>
+              {p.id === playerId && ' (You)'}
+              {' - '}
+              {p.chips} chips
+              {index === 0 && ' 👑'}
+              {p.chips === 0 && ' (Eliminated)'}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {/* Return to lobby button */}
+      <div style={{ marginTop: '30px', textAlign: 'center' }}>
+        <button
+          onClick={handleLeaveRoom}
+          style={{
+            padding: '12px 24px',
+            fontSize: '16px',
+            backgroundColor: '#2196f3',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+          }}
+        >
+          Return to Lobby
+        </button>
       </div>
     </div>
   );

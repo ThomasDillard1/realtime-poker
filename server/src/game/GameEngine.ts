@@ -65,6 +65,7 @@ export function startGame(room: Room): GameState {
     dealerIndex,
     playerOrder,
     roundBets: new Map(),
+    playerContributions: new Map(),  // Track total contributions
     playersActed: new Set(),
     lastRaiser: playerOrder[bigBlindIndex], // BB is considered the "raiser" pre-flop
     handNumber: 1,
@@ -78,12 +79,14 @@ export function startGame(room: Room): GameState {
   sbPlayer.chips -= sbAmount;
   sbPlayer.bet = sbAmount;
   gameState.roundBets.set(sbPlayer.id, sbAmount);
+  gameState.playerContributions.set(sbPlayer.id, sbAmount);
   gameState.pot += sbAmount;
 
   const bbAmount = Math.min(bbPlayer.chips, room.bigBlind);
   bbPlayer.chips -= bbAmount;
   bbPlayer.bet = bbAmount;
   gameState.roundBets.set(bbPlayer.id, bbAmount);
+  gameState.playerContributions.set(bbPlayer.id, bbAmount);
   gameState.pot += bbAmount;
 
   return gameState;
@@ -172,6 +175,7 @@ export function processAction(
       player.bet += callAmount;
       gameState.pot += callAmount;
       gameState.roundBets.set(playerId, (gameState.roundBets.get(playerId) || 0) + callAmount);
+      gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + callAmount);
       break;
     }
 
@@ -202,6 +206,7 @@ export function processAction(
 
       const newTotal = playerBet + actualAdd;
       gameState.roundBets.set(playerId, newTotal);
+      gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + actualAdd);
 
       // Update minRaise for display purposes (the raise amount)
       gameState.minRaise = newTotal;
@@ -223,6 +228,7 @@ export function processAction(
       gameState.pot += allInAmount;
       const newBet = (gameState.roundBets.get(playerId) || 0) + allInAmount;
       gameState.roundBets.set(playerId, newBet);
+      gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + allInAmount);
       if (newBet > gameState.currentBet) {
         gameState.currentBet = newBet;
         // Reset acted tracking - everyone needs to respond to the raise
@@ -553,13 +559,14 @@ export function evaluateHand(cards: Card[], playerId: string = ''): HandResult {
 
 export function determineWinners(gameState: GameState, players: Map<string, Player>): Winner[] {
   const activePlayers = getActivePlayers(gameState, players);
-  const results: { player: Player; handResult: HandResult }[] = [];
+  const results: { player: Player; handResult: HandResult; contribution: number }[] = [];
 
-  // Evaluate each active player's hand
+  // Evaluate each active player's hand and get their contribution
   for (const player of activePlayers) {
     const allCards = [...player.hand, ...gameState.communityCards];
     const handResult = evaluateHand(allCards, player.id);
-    results.push({ player, handResult });
+    const contribution = gameState.playerContributions.get(player.id) || 0;
+    results.push({ player, handResult, contribution });
   }
 
   // Sort by score descending
@@ -567,20 +574,69 @@ export function determineWinners(gameState: GameState, players: Map<string, Play
 
   // Find all players with the highest score (could be a tie)
   const highestScore = results[0].handResult.score;
-  const winners = results.filter(r => r.handResult.score === highestScore);
+  const winnerResults = results.filter(r => r.handResult.score === highestScore);
 
-  // Split pot among winners
-  const potShare = Math.floor(gameState.pot / winners.length);
+  // Calculate how much each winner can win
+  // Winner can only win up to their contribution from each other player
+  const winners: Winner[] = [];
+  let totalAwarded = 0;
 
-  return winners.map(w => ({
-    playerId: w.player.id,
-    amount: potShare,
-    handResult: w.handResult,
-  }));
+  for (const winnerResult of winnerResults) {
+    const winnerContribution = winnerResult.contribution;
+    let winAmount = 0;
+
+    // For each player (including winner), add min(their contribution, winner's contribution) / num winners
+    for (const result of results) {
+      const theirContribution = result.contribution;
+      // Winner can only claim up to what they put in from each player
+      winAmount += Math.min(theirContribution, winnerContribution);
+    }
+
+    // If multiple winners with same hand, split the winnable amount
+    winAmount = Math.floor(winAmount / winnerResults.length);
+
+    winners.push({
+      playerId: winnerResult.player.id,
+      amount: winAmount,
+      handResult: winnerResult.handResult,
+    });
+
+    totalAwarded += winAmount;
+  }
+
+  // Return any excess to the player who over-bet (uncalled bet)
+  const excessAmount = gameState.pot - totalAwarded;
+  if (excessAmount > 0) {
+    // Find the player who contributed more than the winner
+    // In heads-up, this is the player who bet more than they could win
+    for (const result of results) {
+      const isWinner = winnerResults.some(w => w.player.id === result.player.id);
+      if (!isWinner) {
+        // Check if this player over-contributed
+        const winnerMaxContribution = Math.max(...winnerResults.map(w => w.contribution));
+        if (result.contribution > winnerMaxContribution) {
+          // Return the excess to this player
+          const playerExcess = result.contribution - winnerMaxContribution;
+          result.player.chips += playerExcess;
+        }
+      }
+    }
+  }
+
+  return winners;
 }
 
 export function startNextHand(room: Room, previousDealerIndex: number): GameState | null {
   const players = room.players;
+
+  // First, clear ALL position flags for ALL players
+  for (const player of players.values()) {
+    player.isDealer = false;
+    player.isSmallBlind = false;
+    player.isBigBlind = false;
+    player.hand = [];
+    player.bet = 0;
+  }
 
   // Mark players with no chips as 'out'
   for (const player of players.values()) {
@@ -616,7 +672,7 @@ export function startNextHand(room: Room, previousDealerIndex: number): GameStat
     ? smallBlindIndex  // Heads-up: SB acts first pre-flop
     : (dealerIndex + 3) % numPlayers;
 
-  // Reset and set up all players
+  // Set up only eligible players
   for (const [i, playerId] of playerOrder.entries()) {
     const player = players.get(playerId)!;
     player.hand = dealCards(deck, 2);
@@ -641,6 +697,7 @@ export function startNextHand(room: Room, previousDealerIndex: number): GameStat
     dealerIndex,
     playerOrder,
     roundBets: new Map(),
+    playerContributions: new Map(),
     playersActed: new Set(),
     lastRaiser: playerOrder[bigBlindIndex],
     handNumber: (room.gameState?.handNumber || 0) + 1,
@@ -654,12 +711,14 @@ export function startNextHand(room: Room, previousDealerIndex: number): GameStat
   sbPlayer.chips -= sbAmount;
   sbPlayer.bet = sbAmount;
   gameState.roundBets.set(sbPlayer.id, sbAmount);
+  gameState.playerContributions.set(sbPlayer.id, sbAmount);
   gameState.pot += sbAmount;
 
   const bbAmount = Math.min(bbPlayer.chips, room.bigBlind);
   bbPlayer.chips -= bbAmount;
   bbPlayer.bet = bbAmount;
   gameState.roundBets.set(bbPlayer.id, bbAmount);
+  gameState.playerContributions.set(bbPlayer.id, bbAmount);
   gameState.pot += bbAmount;
 
   return gameState;

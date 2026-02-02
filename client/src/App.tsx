@@ -1,8 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { Lobby } from './components/Lobby';
 import { Table } from './components/Table';
-import { RoomDTO, GameStateDTO, ActionType, PlayerDTO, ServerMessage, HandCompletePayload } from './types';
+import { RoomDTO, GameStateDTO, ActionType, PlayerDTO, ServerMessage, HandCompletePayload, GameOverPayload } from './types';
 
 function App() {
   const [room, setRoom] = useState<RoomDTO | null>(null);
@@ -11,6 +11,8 @@ function App() {
   const [validActions, setValidActions] = useState<ActionType[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [handComplete, setHandComplete] = useState<HandCompletePayload | null>(null);
+  const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);
+  const [availableRooms, setAvailableRooms] = useState<RoomDTO[]>([]);
 
   const handleMessage = useCallback((message: ServerMessage) => {
     switch (message.type) {
@@ -43,8 +45,12 @@ function App() {
         });
         setPlayerId((currentPlayerId) => {
           if (message.payload.playerId === currentPlayerId) {
+            // Player is leaving - clear all game state
             setRoom(null);
             setGameState(null);
+            setGameOver(null);
+            setHandComplete(null);
+            setValidActions([]);
             return null;
           }
           return currentPlayerId;
@@ -54,6 +60,7 @@ function App() {
       case 'game-started':
         setGameState(message.payload.gameState);
         setHandComplete(null); // Clear previous hand result
+        setGameOver(null); // Clear game over state
         setValidActions([]);
         break;
 
@@ -71,6 +78,17 @@ function App() {
         setValidActions([]);
         break;
 
+      case 'rooms-list':
+        setAvailableRooms(message.payload.rooms);
+        break;
+
+      case 'game-over':
+        setGameOver(message.payload);
+        setGameState(null);
+        setHandComplete(null);
+        setValidActions([]);
+        break;
+
       case 'error':
         setError(message.payload.message);
         break;
@@ -79,22 +97,31 @@ function App() {
 
   const { isConnected, send } = useWebSocket(handleMessage);
 
+  // Request rooms list when connected and not in a room
+  useEffect(() => {
+    if (isConnected && !room) {
+      send({ type: 'get-rooms', payload: {} });
+    }
+  }, [isConnected, room, send]);
+
   return (
     <div>
       <h1>Poker</h1>
       <p>Status: {isConnected ? 'Connected' : 'Disconnected'}</p>
       {error && <p style={{ color: 'red' }}>Error: {error}</p>}
 
-      {gameState || handComplete ? (
+      {gameState || handComplete || gameOver ? (
         <Table
           gameState={gameState}
           playerId={playerId!}
+          roomId={room?.id || ''}
           validActions={validActions}
           handComplete={handComplete}
+          gameOver={gameOver}
           onSend={send}
         />
       ) : (
-        <Lobby onSend={send} room={room} playerId={playerId} />
+        <Lobby onSend={send} room={room} playerId={playerId} availableRooms={availableRooms} />
       )}
     </div>
   );

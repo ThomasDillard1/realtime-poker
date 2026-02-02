@@ -69,6 +69,9 @@ export class WebSocketHandler {
       case 'player-action':
         this.handlePlayerAction(ws, message.payload);
         break;
+      case 'get-rooms':
+        this.handleGetRooms(ws);
+        break;
       default:
         this.sendError(ws, 'Unknown message type');
     }
@@ -95,6 +98,9 @@ export class WebSocketHandler {
       type: 'room-joined',
       payload: { room: roomDTO, playerId: player.id },
     });
+
+    // Broadcast updated room list to lobby clients
+    this.broadcastRoomsList();
   }
 
   private handleJoinRoom(ws: WebSocket, payload: { roomId: string; playerName: string }): void {
@@ -132,6 +138,9 @@ export class WebSocketHandler {
       type: 'room-joined',
       payload: { room: this.toRoomDTO(room), playerId: player.id },
     });
+
+    // Broadcast updated room list to lobby clients
+    this.broadcastRoomsList();
   }
 
   private handleLeaveRoom(ws: WebSocket, payload: { roomId: string; playerId: string }): void {
@@ -148,6 +157,32 @@ export class WebSocketHandler {
     if (client) {
       client.playerId = null;
       client.roomId = null;
+    }
+
+    // Broadcast updated room list to lobby clients
+    this.broadcastRoomsList();
+  }
+
+  private handleGetRooms(ws: WebSocket): void {
+    const rooms = gameManager.getAllRooms();
+    const roomDTOs = rooms.map(room => this.toRoomDTO(room));
+    this.send(ws, {
+      type: 'rooms-list',
+      payload: { rooms: roomDTOs },
+    });
+  }
+
+  private broadcastRoomsList(): void {
+    const rooms = gameManager.getAllRooms();
+    const roomDTOs = rooms.map(room => this.toRoomDTO(room));
+    // Broadcast to all clients not currently in a room
+    for (const [, client] of this.clients) {
+      if (!client.roomId) {
+        this.send(client.ws, {
+          type: 'rooms-list',
+          payload: { rooms: roomDTOs },
+        });
+      }
     }
   }
 
@@ -183,6 +218,9 @@ export class WebSocketHandler {
       type: 'action-required',
       payload: { playerId: currentPlayerId, validActions },
     });
+
+    // Broadcast updated room list (room is now in progress)
+    this.broadcastRoomsList();
 
     console.log(`[${new Date().toISOString()}] Game started in room ${room.id}`);
   }
@@ -253,12 +291,45 @@ export class WebSocketHandler {
     const eligiblePlayers = Array.from(room.players.values()).filter(p => p.chips > 0);
 
     if (eligiblePlayers.length < 2) {
-      // Broadcast game over - not enough players
-      this.broadcastToRoom(roomId, {
-        type: 'error',
-        payload: { message: 'Game over - not enough players with chips to continue' },
-      });
-      console.log(`[${new Date().toISOString()}] Not enough players in room ${roomId} to continue`);
+      // Game over - we have a winner!
+      if (eligiblePlayers.length === 1) {
+        const winner = eligiblePlayers[0];
+        winner.status = 'active'; // Mark winner as active for display
+
+        // Mark all other players as out
+        for (const player of room.players.values()) {
+          if (player.id !== winner.id) {
+            player.status = 'out';
+          }
+        }
+
+        // Sort players by chips for final standings
+        const allPlayers = Array.from(room.players.values())
+          .sort((a, b) => b.chips - a.chips);
+
+        this.broadcastToRoom(roomId, {
+          type: 'game-over',
+          payload: {
+            winner: this.toPlayerDTO(winner),
+            players: allPlayers.map(p => this.toPlayerDTO(p)),
+          },
+        });
+
+        // Clear game state
+        room.gameState = null;
+
+        // Update room list for lobby
+        this.broadcastRoomsList();
+
+        console.log(`[${new Date().toISOString()}] Game over in room ${roomId}! Winner: ${winner.name}`);
+      } else {
+        // No players left (shouldn't happen normally)
+        this.broadcastToRoom(roomId, {
+          type: 'error',
+          payload: { message: 'Game over - no players remaining' },
+        });
+        console.log(`[${new Date().toISOString()}] No players remaining in room ${roomId}`);
+      }
       return;
     }
 
