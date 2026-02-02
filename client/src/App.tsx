@@ -9,6 +9,7 @@ function App() {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<GameStateDTO | null>(null);
   const [validActions, setValidActions] = useState<ActionType[]>([]);
+  const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [handComplete, setHandComplete] = useState<HandCompletePayload | null>(null);
   const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);
@@ -70,12 +71,14 @@ function App() {
 
       case 'action-required':
         setValidActions(message.payload.validActions);
+        setTurnDeadline(message.payload.turnDeadline);
         break;
 
       case 'hand-complete':
         setHandComplete(message.payload);
         setGameState(null); // Game state cleared after hand completes
         setValidActions([]);
+        setTurnDeadline(null);
         break;
 
       case 'rooms-list':
@@ -87,6 +90,7 @@ function App() {
         setGameState(null);
         setHandComplete(null);
         setValidActions([]);
+        setTurnDeadline(null);
         break;
 
       case 'error':
@@ -115,6 +119,7 @@ function App() {
           roomId={room?.id || ''}
           roomName={room?.name || ''}
           validActions={validActions}
+          turnDeadline={turnDeadline}
           handComplete={handComplete}
           gameOver={gameOver}
           onSend={send}

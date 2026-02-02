@@ -1,5 +1,5 @@
 import { WebSocketServer as WSServer, WebSocket } from 'ws';
-import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO, GameStateDTO, Room, PlayerAction, ShowdownPlayerDTO, HandCompletePayload } from '../types/index.js';
+import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO, GameStateDTO, Room, PlayerAction, ShowdownPlayerDTO, HandCompletePayload, ActionType } from '../types/index.js';
 import { gameManager } from '../game/GameManager.js';
 import { startGame, getValidActions, processAction, getActivePlayers, determineWinners, startNextHand } from '../game/GameEngine.js';
 
@@ -9,9 +9,12 @@ interface ClientConnection {
   roomId: string | null;
 }
 
+const ACTION_TIMER_SECONDS = 30;
+
 export class WebSocketHandler {
   private wss: WSServer;
   private clients: Map<WebSocket, ClientConnection> = new Map();
+  private actionTimers: Map<string, NodeJS.Timeout> = new Map(); // roomId -> timer
 
   constructor(port: number) {
     this.wss = new WSServer({ port });
@@ -209,15 +212,8 @@ export class WebSocketHandler {
     // Send personalized game state to each player
     this.broadcastGameState(room);
 
-    // Send action-required to current player
-    const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
-    const currentPlayer = room.players.get(currentPlayerId)!;
-    const validActions = getValidActions(room.gameState, currentPlayer);
-
-    this.broadcastToRoom(room.id, {
-      type: 'action-required',
-      payload: { playerId: currentPlayerId, validActions },
-    });
+    // Send action-required to current player with timer
+    this.sendActionRequired(room);
 
     // Broadcast updated room list (room is now in progress)
     this.broadcastRoomsList();
@@ -261,15 +257,8 @@ export class WebSocketHandler {
     // Send personalized game state to each player
     this.broadcastGameState(room);
 
-    // Send action-required to current player
-    const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
-    const currentPlayer = room.players.get(currentPlayerId)!;
-    const validActions = getValidActions(room.gameState, currentPlayer);
-
-    this.broadcastToRoom(room.id, {
-      type: 'action-required',
-      payload: { playerId: currentPlayerId, validActions },
-    });
+    // Send action-required to current player with timer
+    this.sendActionRequired(room);
 
     console.log(`[${new Date().toISOString()}] Next hand started in room ${room.id}, hand #${gameState.handNumber}`);
   }
@@ -345,15 +334,8 @@ export class WebSocketHandler {
     // Send personalized game state to each player
     this.broadcastGameState(room);
 
-    // Send action-required to current player
-    const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
-    const currentPlayer = room.players.get(currentPlayerId)!;
-    const validActions = getValidActions(room.gameState, currentPlayer);
-
-    this.broadcastToRoom(roomId, {
-      type: 'action-required',
-      payload: { playerId: currentPlayerId, validActions },
-    });
+    // Send action-required to current player with timer
+    this.sendActionRequired(room);
 
     console.log(`[${new Date().toISOString()}] Auto-started hand #${gameState.handNumber} in room ${roomId}`);
   }
@@ -364,6 +346,9 @@ export class WebSocketHandler {
       this.sendError(ws, 'Game not found');
       return;
     }
+
+    // Clear the action timer since player acted
+    this.clearActionTimer(room.id);
 
     const result = processAction(
       room.gameState,
@@ -382,68 +367,10 @@ export class WebSocketHandler {
     this.broadcastGameUpdate(room);
 
     if (result.handComplete) {
-      // Hand is complete - determine winner
-      const activePlayers = getActivePlayers(room.gameState, room.players);
-      const isShowdown = activePlayers.length > 1;
-      let winners;
-
-      if (!isShowdown) {
-        // Everyone else folded - last player wins
-        const winner = activePlayers[0];
-        winners = [{
-          playerId: winner.id,
-          amount: room.gameState.pot,
-          handResult: { playerId: winner.id, rank: 'high-card' as const, cards: [], score: 0 },
-        }];
-      } else {
-        // Showdown - evaluate hands and determine winners
-        winners = determineWinners(room.gameState, room.players);
-      }
-
-      // Award chips to winners
-      for (const winner of winners) {
-        const player = room.players.get(winner.playerId);
-        if (player) {
-          player.chips += winner.amount;
-        }
-      }
-
-      // Build showdown payload with revealed cards
-      const handCompletePayload: HandCompletePayload = {
-        winners,
-        players: Array.from(room.players.values()).map((p) => this.toShowdownPlayerDTO(p, isShowdown)),
-        communityCards: room.gameState.communityCards,
-        pot: room.gameState.pot,
-        isShowdown,
-      };
-
-      // Save dealer index before clearing game state
-      const previousDealerIndex = room.gameState.dealerIndex;
-
-      // Broadcast hand complete with winner info
-      this.broadcastToRoom(room.id, {
-        type: 'hand-complete',
-        payload: handCompletePayload,
-      });
-
-      // Clear game state for new hand
-      room.gameState = null;
-
-      // Auto-start next hand after 6 seconds
-      const roomId = room.id;
-      setTimeout(() => {
-        this.autoStartNextHand(roomId, previousDealerIndex);
-      }, 6000);
+      this.handleHandComplete(room);
     } else {
-      // Send action-required to current player
-      const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
-      const currentPlayer = room.players.get(currentPlayerId)!;
-      const validActions = getValidActions(room.gameState, currentPlayer);
-
-      this.broadcastToRoom(room.id, {
-        type: 'action-required',
-        payload: { playerId: currentPlayerId, validActions },
-      });
+      // Send action-required to next player with timer
+      this.sendActionRequired(room);
     }
   }
 
@@ -564,5 +491,137 @@ export class WebSocketHandler {
         });
       }
     }
+  }
+
+  private startActionTimer(roomId: string, playerId: string, validActions: ActionType[]): number {
+    // Clear any existing timer for this room
+    this.clearActionTimer(roomId);
+
+    const deadline = Date.now() + (ACTION_TIMER_SECONDS * 1000);
+
+    const timer = setTimeout(() => {
+      this.handleActionTimeout(roomId, playerId, validActions);
+    }, ACTION_TIMER_SECONDS * 1000);
+
+    this.actionTimers.set(roomId, timer);
+    return deadline;
+  }
+
+  private clearActionTimer(roomId: string): void {
+    const timer = this.actionTimers.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.actionTimers.delete(roomId);
+    }
+  }
+
+  private handleActionTimeout(roomId: string, playerId: string, validActions: ActionType[]): void {
+    const room = gameManager.getRoom(roomId);
+    if (!room || !room.gameState) {
+      return;
+    }
+
+    // Verify it's still this player's turn
+    const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
+    if (currentPlayerId !== playerId) {
+      return;
+    }
+
+    // Auto-act: check if valid, otherwise fold
+    const autoAction: ActionType = validActions.includes('check') ? 'check' : 'fold';
+
+    console.log(`[${new Date().toISOString()}] Action timeout for ${playerId} in room ${roomId}, auto-${autoAction}`);
+
+    // Process the auto-action
+    const result = processAction(
+      room.gameState,
+      room.players,
+      playerId,
+      autoAction,
+      undefined
+    );
+
+    if (!result.success) {
+      console.error(`[${new Date().toISOString()}] Auto-action failed: ${result.error}`);
+      return;
+    }
+
+    // Broadcast updated game state
+    this.broadcastGameUpdate(room);
+
+    if (result.handComplete) {
+      this.handleHandComplete(room);
+    } else {
+      // Send action-required to next player
+      this.sendActionRequired(room);
+    }
+  }
+
+  private sendActionRequired(room: Room): void {
+    if (!room.gameState) return;
+
+    const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
+    const currentPlayer = room.players.get(currentPlayerId)!;
+    const validActions = getValidActions(room.gameState, currentPlayer);
+
+    // Start timer and get deadline
+    const turnDeadline = this.startActionTimer(room.id, currentPlayerId, validActions);
+
+    this.broadcastToRoom(room.id, {
+      type: 'action-required',
+      payload: { playerId: currentPlayerId, validActions, turnDeadline },
+    });
+  }
+
+  private handleHandComplete(room: Room): void {
+    if (!room.gameState) return;
+
+    // Clear action timer
+    this.clearActionTimer(room.id);
+
+    const activePlayers = getActivePlayers(room.gameState, room.players);
+    const isShowdown = activePlayers.length > 1;
+    let winners;
+
+    if (!isShowdown) {
+      const winner = activePlayers[0];
+      winners = [{
+        playerId: winner.id,
+        amount: room.gameState.pot,
+        handResult: { playerId: winner.id, rank: 'high-card' as const, cards: [], score: 0 },
+      }];
+    } else {
+      winners = determineWinners(room.gameState, room.players);
+    }
+
+    // Award chips to winners
+    for (const winner of winners) {
+      const player = room.players.get(winner.playerId);
+      if (player) {
+        player.chips += winner.amount;
+      }
+    }
+
+    const handCompletePayload: HandCompletePayload = {
+      winners,
+      players: Array.from(room.players.values()).map((p) => this.toShowdownPlayerDTO(p, isShowdown)),
+      communityCards: room.gameState.communityCards,
+      pot: room.gameState.pot,
+      isShowdown,
+    };
+
+    const previousDealerIndex = room.gameState.dealerIndex;
+
+    this.broadcastToRoom(room.id, {
+      type: 'hand-complete',
+      payload: handCompletePayload,
+    });
+
+    room.gameState = null;
+
+    const roomId = room.id;
+    setTimeout(() => {
+      this.autoStartNextHand(roomId, previousDealerIndex);
+    }, 6000);
   }
 }

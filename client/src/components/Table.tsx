@@ -8,6 +8,7 @@ interface TableProps {
   roomId: string;
   roomName: string;
   validActions: ActionType[];
+  turnDeadline: number | null;
   handComplete: HandCompletePayload | null;
   gameOver: GameOverPayload | null;
   onSend: (message: ClientMessage) => void;
@@ -30,8 +31,27 @@ function formatHandRank(rank: string): string {
   return formatted[rank] || rank;
 }
 
-export function Table({ gameState, playerId, roomId, roomName, validActions, handComplete, gameOver, onSend }: TableProps) {
+export function Table({ gameState, playerId, roomId, roomName, validActions, turnDeadline, handComplete, gameOver, onSend }: TableProps) {
   const [betAmount, setBetAmount] = useState<number>(0);
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+
+  // Update timer countdown
+  useEffect(() => {
+    if (!turnDeadline) {
+      setTimeRemaining(null);
+      return;
+    }
+
+    const updateTimer = () => {
+      const remaining = Math.max(0, Math.ceil((turnDeadline - Date.now()) / 1000));
+      setTimeRemaining(remaining);
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 100);
+
+    return () => clearInterval(interval);
+  }, [turnDeadline]);
 
   // If game is over, show the game over screen
   if (gameOver) {
@@ -86,103 +106,288 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, han
   // Set initial bet amount when it's player's turn
   const effectiveMinBet = Math.min(minBet, (myPlayer?.chips || 0) + myCurrentBet);
 
+  // Calculate seat positions around the table based on number of players
+  const getSeatPositions = (numPlayers: number) => {
+    const positions: Array<{ top?: string; bottom?: string; left?: string; right?: string; transform: string }> = [];
+
+    if (numPlayers === 2) {
+      // Two players: top and bottom
+      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ bottom: '0', left: '50%', transform: 'translateX(-50%)' });
+    } else if (numPlayers === 3) {
+      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ bottom: '0', left: '25%', transform: 'translateX(-50%)' });
+      positions.push({ bottom: '0', right: '25%', transform: 'translateX(50%)' });
+    } else if (numPlayers === 4) {
+      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '50%', left: '0', transform: 'translateX(-50%) translateY(-50%)' });
+      positions.push({ bottom: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '50%', right: '0', transform: 'translateX(50%) translateY(-50%)' });
+    } else if (numPlayers === 5) {
+      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '30%', left: '0', transform: 'translateX(-50%) translateY(-50%)' });
+      positions.push({ bottom: '0', left: '25%', transform: 'translateX(-50%)' });
+      positions.push({ bottom: '0', right: '25%', transform: 'translateX(50%)' });
+      positions.push({ top: '30%', right: '0', transform: 'translateX(50%) translateY(-50%)' });
+    } else {
+      // 6 players
+      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '30%', left: '0', transform: 'translateX(-50%) translateY(-50%)' });
+      positions.push({ bottom: '30%', left: '0', transform: 'translateX(-50%) translateY(50%)' });
+      positions.push({ bottom: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ bottom: '30%', right: '0', transform: 'translateX(50%) translateY(50%)' });
+      positions.push({ top: '30%', right: '0', transform: 'translateX(50%) translateY(-50%)' });
+    }
+
+    return positions;
+  };
+
+  const seatPositions = getSeatPositions(gameState.players.length);
+
   return (
     <div>
-      <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>{roomName}</h2>
+      {/* Pulsing animation for active player */}
+      <style>
+        {`
+          @keyframes pulse-glow {
+            0%, 100% {
+              box-shadow: 0 0 8px rgba(255, 193, 7, 0.4), 0 0 16px rgba(255, 193, 7, 0.2);
+            }
+            50% {
+              box-shadow: 0 0 16px rgba(255, 193, 7, 0.6), 0 0 28px rgba(255, 193, 7, 0.3);
+            }
+          }
+        `}
+      </style>
 
-      {/* Poker Table */}
+      {/* Table Container with Player Seats */}
       <div style={{
-        width: '100%',
-        maxWidth: '600px',
-        height: '280px',
-        margin: '0 auto 30px auto',
-        background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 50%, #1a472a 100%)',
-        borderRadius: '150px / 100px',
-        border: '12px solid #5d4037',
-        boxShadow: 'inset 0 0 50px rgba(0,0,0,0.3), 0 8px 20px rgba(0,0,0,0.4)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
         position: 'relative',
+        width: '100%',
+        maxWidth: '700px',
+        margin: '20px auto 20px auto',
+        padding: '90px 80px',
       }}>
-        {/* Pot Display */}
-        <div style={{
-          color: '#ffd700',
-          fontSize: '20px',
-          fontWeight: 'bold',
-          textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
-          marginBottom: '15px',
-        }}>
-          Pot: ${gameState.pot}
-        </div>
+        {/* Player Seats */}
+        {gameState.players.map((p, index) => {
+          const position = seatPositions[index] || seatPositions[0];
+          const isCurrentTurn = p.id === gameState.currentPlayerId;
+          const isYou = p.id === playerId;
+          const isFolded = p.status === 'folded';
+          const isAllIn = p.status === 'all-in';
 
-        {/* Community Cards */}
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          justifyContent: 'center',
-          alignItems: 'center',
-          minHeight: '100px',
-        }}>
-          {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} style={{
-              width: '62px',
-              height: '86px',
-              backgroundColor: 'rgba(0,0,0,0.2)',
-              borderRadius: '6px',
-              border: '2px dashed rgba(255,255,255,0.2)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+          return (
+            <div key={p.id} style={{
+              position: 'absolute',
+              ...position,
+              backgroundColor: isCurrentTurn ? '#fff8e1' : '#f5f5f5',
+              border: isCurrentTurn ? '2px solid #ffc107' : '1px solid #ddd',
+              borderRadius: '10px',
+              padding: '10px 14px',
+              minWidth: '140px',
+              textAlign: 'center',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+              zIndex: 10,
+              animation: isCurrentTurn ? 'pulse-glow 2s ease-in-out infinite' : 'none',
+              opacity: isFolded ? 0.4 : 1,
+              transition: 'opacity 0.3s ease',
             }}>
-              {gameState.communityCards[i] && (
-                <CardDisplay card={gameState.communityCards[i]} height="82px" />
+              {/* Cards Row */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                gap: '4px',
+                marginBottom: '8px',
+              }}>
+                {isYou && gameState.myCards && gameState.myCards.length > 0 ? (
+                  // Show face-up cards for current player
+                  gameState.myCards.map((card, i) => (
+                    <CardDisplay key={i} card={card} height="50px" />
+                  ))
+                ) : (
+                  // Show face-down cards for other players (if not folded)
+                  !isFolded && (
+                    <>
+                      <div style={{
+                        width: '36px',
+                        height: '50px',
+                        background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
+                        borderRadius: '4px',
+                        border: '1px solid #0d1442',
+                        boxShadow: 'inset 0 0 10px rgba(255,255,255,0.1)',
+                      }} />
+                      <div style={{
+                        width: '36px',
+                        height: '50px',
+                        background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
+                        borderRadius: '4px',
+                        border: '1px solid #0d1442',
+                        boxShadow: 'inset 0 0 10px rgba(255,255,255,0.1)',
+                      }} />
+                    </>
+                  )
+                )}
+              </div>
+
+              {/* Action Timer */}
+              {isCurrentTurn && timeRemaining !== null && (
+                <div style={{ marginBottom: '6px' }}>
+                  <div style={{
+                    width: '100%',
+                    height: '4px',
+                    backgroundColor: '#e0e0e0',
+                    borderRadius: '2px',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      width: `${(timeRemaining / 30) * 100}%`,
+                      height: '100%',
+                      backgroundColor: timeRemaining <= 5 ? '#f44336' : timeRemaining <= 10 ? '#ff9800' : '#4caf50',
+                      transition: 'width 0.1s linear, background-color 0.3s ease',
+                    }} />
+                  </div>
+                  <div style={{
+                    fontSize: '11px',
+                    color: timeRemaining <= 5 ? '#f44336' : '#666',
+                    marginTop: '2px',
+                    fontWeight: timeRemaining <= 5 ? 'bold' : 'normal',
+                  }}>
+                    {timeRemaining}s
+                  </div>
+                </div>
+              )}
+
+              {/* Player Name & Position Badges */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                marginBottom: '4px',
+              }}>
+                <span style={{ fontWeight: 'bold', fontSize: '13px' }}>
+                  {p.name}
+                  {isYou && <span style={{ color: '#666', marginLeft: '4px', fontWeight: 'normal', fontSize: '11px' }}>(You)</span>}
+                </span>
+                {(p.isDealer || p.isSmallBlind || p.isBigBlind) && (
+                  <span style={{ fontSize: '10px' }}>
+                    {p.isDealer && <span style={{ backgroundColor: '#333', color: '#fff', padding: '1px 5px', borderRadius: '3px', marginRight: '2px' }}>D</span>}
+                    {p.isSmallBlind && <span style={{ backgroundColor: '#666', color: '#fff', padding: '1px 5px', borderRadius: '3px', marginRight: '2px' }}>SB</span>}
+                    {p.isBigBlind && <span style={{ backgroundColor: '#999', color: '#fff', padding: '1px 5px', borderRadius: '3px' }}>BB</span>}
+                  </span>
+                )}
+              </div>
+
+              {/* Chips & Bet Row */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px',
+              }}>
+                <span style={{ color: '#333', fontWeight: '500' }}>${p.chips}</span>
+                {p.bet > 0 && (
+                  <span style={{
+                    color: '#e65100',
+                    fontWeight: 'bold',
+                    backgroundColor: '#fff3e0',
+                    padding: '1px 6px',
+                    borderRadius: '4px',
+                  }}>
+                    ${p.bet}
+                  </span>
+                )}
+              </div>
+
+              {/* Status Badge */}
+              {(isFolded || isAllIn) && (
+                <div style={{
+                  fontSize: '10px',
+                  color: '#fff',
+                  backgroundColor: isFolded ? '#9e9e9e' : '#7b1fa2',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  marginTop: '4px',
+                  display: 'inline-block',
+                  textTransform: 'uppercase',
+                  fontWeight: 'bold',
+                  letterSpacing: '0.5px',
+                }}>
+                  {p.status}
+                </div>
               )}
             </div>
-          ))}
-        </div>
+          );
+        })}
 
-        {/* Current Bet Display */}
-        {gameState.currentBet > 0 && (
+        {/* Poker Table */}
+        <div style={{
+          width: '100%',
+          height: '280px',
+          background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 50%, #1a472a 100%)',
+          borderRadius: '150px / 100px',
+          border: '12px solid #5d4037',
+          boxShadow: 'inset 0 0 50px rgba(0,0,0,0.3), 0 8px 20px rgba(0,0,0,0.4)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          position: 'relative',
+        }}>
+          {/* Pot Display */}
           <div style={{
-            color: '#fff',
-            fontSize: '14px',
-            marginTop: '15px',
-            opacity: 0.8,
+            color: '#ffd700',
+            fontSize: '20px',
+            fontWeight: 'bold',
+            textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
+            marginBottom: '15px',
           }}>
-            Current Bet: ${gameState.currentBet}
+            Pot: ${gameState.pot}
           </div>
-        )}
-      </div>
 
-      {/* Your Cards */}
-      <div style={{ marginBottom: '20px', textAlign: 'center' }}>
-        <h3>Your Cards</h3>
-        {gameState.myCards && gameState.myCards.length > 0 ? (
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
-            <CardHand cards={gameState.myCards} height="110px" />
+          {/* Community Cards */}
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            justifyContent: 'center',
+            alignItems: 'center',
+            minHeight: '100px',
+          }}>
+            {[0, 1, 2, 3, 4].map((i) => {
+              const hasCard = !!gameState.communityCards[i];
+              return (
+                <div key={i} style={{
+                  width: '62px',
+                  height: '86px',
+                  backgroundColor: hasCard ? 'transparent' : 'rgba(0,0,0,0.2)',
+                  borderRadius: '6px',
+                  border: hasCard ? 'none' : '2px dashed rgba(255,255,255,0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  {hasCard && (
+                    <CardDisplay card={gameState.communityCards[i]} height="86px" />
+                  )}
+                </div>
+              );
+            })}
           </div>
-        ) : (
-          <p style={{ color: '#666' }}>No cards</p>
-        )}
-      </div>
 
-      {/* Players */}
-      <div>
-        <h3>Players</h3>
-        <ul>
-          {gameState.players.map((p) => (
-            <li key={p.id}>
-              {p.name} - {p.chips} chips - bet: {p.bet} - {p.status}
-              {p.isDealer && ' (D)'}
-              {p.isSmallBlind && ' (SB)'}
-              {p.isBigBlind && ' (BB)'}
-              {p.id === gameState.currentPlayerId && ' <-- Turn'}
-              {p.id === playerId && ' (You)'}
-            </li>
-          ))}
-        </ul>
+          {/* Room Name (faded) */}
+          <div style={{
+            position: 'absolute',
+            bottom: '20px',
+            color: 'rgba(255,255,255,0.15)',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            letterSpacing: '1px',
+            textTransform: 'uppercase',
+          }}>
+            {roomName}
+          </div>
+        </div>
       </div>
 
       {isMyTurn && (

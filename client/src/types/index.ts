@@ -77,7 +77,7 @@ export type ServerMessage =
   | { type: 'player-left'; payload: { roomId: string; playerId: string } }
   | { type: 'game-started'; payload: { gameState: GameStateDTO } }
   | { type: 'game-updated'; payload: { gameState: GameStateDTO } }
-  | { type: 'action-required'; payload: { playerId: string; validActions: ActionType[] } }
+  | { type: 'action-required'; payload: { playerId: string; validActions: ActionType[]; turnDeadline: number } }
   | { type: 'hand-complete'; payload: HandCompletePayload }
   | { type: 'game-over'; payload: GameOverPayload }
   | { type: 'rooms-list'; payload: { rooms: RoomDTO[] } }
