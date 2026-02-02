@@ -3,10 +3,15 @@ import { ClientMessage, ServerMessage } from '../types';
 
 const WS_URL = 'ws://localhost:8080';
 
-export function useWebSocket() {
+export function useWebSocket(onMessage: (message: ServerMessage) => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [lastMessage, setLastMessage] = useState<ServerMessage | null>(null);
+  const onMessageRef = useRef(onMessage);
+
+  // Keep the callback ref up to date
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
@@ -22,7 +27,7 @@ export function useWebSocket() {
 
     ws.onmessage = (event) => {
       const message: ServerMessage = JSON.parse(event.data);
-      setLastMessage(message);
+      onMessageRef.current(message);
     };
 
     return () => {
@@ -36,5 +41,5 @@ export function useWebSocket() {
     }
   }, []);
 
-  return { isConnected, lastMessage, send };
+  return { isConnected, send };
 }

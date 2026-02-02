@@ -1,26 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { Lobby } from './components/Lobby';
 import { Table } from './components/Table';
-import { RoomDTO, GameStateDTO, ActionType, PlayerDTO } from './types';
+import { RoomDTO, GameStateDTO, ActionType, PlayerDTO, ServerMessage } from './types';
 
 function App() {
-  const { isConnected, lastMessage, send } = useWebSocket();
   const [room, setRoom] = useState<RoomDTO | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<GameStateDTO | null>(null);
   const [validActions, setValidActions] = useState<ActionType[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!lastMessage) return;
-
-    switch (lastMessage.type) {
+  const handleMessage = useCallback((message: ServerMessage) => {
+    switch (message.type) {
       case 'room-created':
       case 'room-joined':
-        setRoom(lastMessage.payload.room);
-        if ('playerId' in lastMessage.payload) {
-          setPlayerId(lastMessage.payload.playerId);
+        setRoom(message.payload.room);
+        if ('playerId' in message.payload) {
+          setPlayerId(message.payload.playerId);
         }
         setError(null);
         break;
@@ -30,7 +27,7 @@ function App() {
           if (!prev) return prev;
           return {
             ...prev,
-            players: [...prev.players, lastMessage.payload.player as PlayerDTO],
+            players: [...prev.players, message.payload.player as PlayerDTO],
           };
         });
         break;
@@ -40,34 +37,39 @@ function App() {
           if (!prev) return prev;
           return {
             ...prev,
-            players: prev.players.filter((p) => p.id !== lastMessage.payload.playerId),
+            players: prev.players.filter((p) => p.id !== message.payload.playerId),
           };
         });
-        if (lastMessage.payload.playerId === playerId) {
-          setRoom(null);
-          setPlayerId(null);
-          setGameState(null);
-        }
+        setPlayerId((currentPlayerId) => {
+          if (message.payload.playerId === currentPlayerId) {
+            setRoom(null);
+            setGameState(null);
+            return null;
+          }
+          return currentPlayerId;
+        });
         break;
 
       case 'game-started':
       case 'game-updated':
-        setGameState(lastMessage.payload.gameState);
+        setGameState(message.payload.gameState);
         break;
 
       case 'action-required':
-        setValidActions(lastMessage.payload.validActions);
+        setValidActions(message.payload.validActions);
         break;
 
       case 'hand-complete':
-        setGameState(lastMessage.payload.newGameState);
+        setGameState(message.payload.newGameState);
         break;
 
       case 'error':
-        setError(lastMessage.payload.message);
+        setError(message.payload.message);
         break;
     }
-  }, [lastMessage, playerId]);
+  }, []);
+
+  const { isConnected, send } = useWebSocket(handleMessage);
 
   return (
     <div>

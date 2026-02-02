@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { GameStateDTO, ActionType, ClientMessage } from '../types';
 
 interface TableProps {
@@ -8,6 +9,17 @@ interface TableProps {
 }
 
 export function Table({ gameState, playerId, validActions, onSend }: TableProps) {
+  const [betAmount, setBetAmount] = useState<number>(0);
+
+  const myPlayer = gameState.players.find(p => p.id === playerId);
+  const myCurrentBet = myPlayer?.bet || 0;
+  const toCall = gameState.currentBet - myCurrentBet;
+
+  // Calculate minimum bet/raise (minimum raise is double the current bet)
+  const minBet = gameState.currentBet === 0
+    ? gameState.bigBlind
+    : gameState.currentBet * 2;
+
   const handleAction = (action: ActionType, amount?: number) => {
     onSend({
       type: 'player-action',
@@ -17,9 +29,13 @@ export function Table({ gameState, playerId, validActions, onSend }: TableProps)
         action: { playerId, action, amount },
       },
     });
+    setBetAmount(0);
   };
 
   const isMyTurn = gameState.currentPlayerId === playerId;
+
+  // Set initial bet amount when it's player's turn
+  const effectiveMinBet = Math.min(minBet, (myPlayer?.chips || 0) + myCurrentBet);
 
   return (
     <div>
@@ -70,23 +86,51 @@ export function Table({ gameState, playerId, validActions, onSend }: TableProps)
       {isMyTurn && (
         <div>
           <h3>Your Turn</h3>
-          {validActions.includes('fold') && (
-            <button onClick={() => handleAction('fold')}>Fold</button>
-          )}
-          {validActions.includes('check') && (
-            <button onClick={() => handleAction('check')}>Check</button>
-          )}
-          {validActions.includes('call') && (
-            <button onClick={() => handleAction('call')}>Call</button>
-          )}
-          {validActions.includes('bet') && (
-            <button onClick={() => handleAction('bet', gameState.currentBet || 20)}>Bet</button>
-          )}
-          {validActions.includes('raise') && (
-            <button onClick={() => handleAction('raise', gameState.currentBet * 2)}>Raise</button>
-          )}
-          {validActions.includes('all-in') && (
-            <button onClick={() => handleAction('all-in')}>All In</button>
+          <div>
+            {validActions.includes('fold') && (
+              <button onClick={() => handleAction('fold')}>Fold</button>
+            )}
+            {validActions.includes('check') && (
+              <button onClick={() => handleAction('check')}>Check</button>
+            )}
+            {validActions.includes('call') && (
+              <button onClick={() => handleAction('call')}>
+                Call {toCall}
+              </button>
+            )}
+            {validActions.includes('all-in') && (
+              <button onClick={() => handleAction('all-in')}>
+                All In ({myPlayer?.chips})
+              </button>
+            )}
+          </div>
+
+          {(validActions.includes('bet') || validActions.includes('raise')) && (
+            <div style={{ marginTop: '10px' }}>
+              <label>
+                {validActions.includes('bet') ? 'Bet' : 'Raise to'}:{' '}
+                <input
+                  type="number"
+                  min={effectiveMinBet}
+                  max={(myPlayer?.chips || 0) + myCurrentBet}
+                  value={betAmount || effectiveMinBet}
+                  onChange={(e) => setBetAmount(Number(e.target.value))}
+                  style={{ width: '80px' }}
+                />
+              </label>
+              <button
+                onClick={() => {
+                  const amount = betAmount || effectiveMinBet;
+                  handleAction(validActions.includes('bet') ? 'bet' : 'raise', amount);
+                }}
+                disabled={betAmount > 0 && betAmount < effectiveMinBet}
+              >
+                {validActions.includes('bet') ? 'Bet' : 'Raise'}
+              </button>
+              <span style={{ marginLeft: '10px', fontSize: '12px', color: '#666' }}>
+                (min: {effectiveMinBet})
+              </span>
+            </div>
           )}
         </div>
       )}

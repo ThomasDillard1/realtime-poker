@@ -53,3 +53,30 @@ npm run dev:client
    9. Action required - Current player notified with valid actions
 3. **Betting Rounds** - Pre-flop, Flop, Turn, River
 4. **Showdown** - Best hand wins the pot
+
+## Player Actions
+
+| Action   | Description                                      |
+|----------|--------------------------------------------------|
+| `fold`   | Surrender the hand, marked as folded             |
+| `check`  | Pass action (only when no bet to call)           |
+| `call`   | Match the current bet                            |
+| `bet`    | Place a bet (when no current bet)                |
+| `raise`  | Increase the current bet                         |
+| `all-in` | Bet all remaining chips                          |
+
+## Action Processing Flow
+
+1. Validate it's the player's turn and action is valid
+2. Process the action (update chips, pot, bets)
+3. Check if only one player remains (everyone else folded) → hand complete
+4. Check if betting round is complete (all bets equal) → advance phase
+5. Otherwise advance to next active player
+6. Broadcast `game-updated` to all players
+7. Send `action-required` to current player (or `hand-complete` if hand ended)
+
+## Phase Progression
+
+```
+pre-flop → flop (3 cards) → turn (1 card) → river (1 card) → showdown
+```

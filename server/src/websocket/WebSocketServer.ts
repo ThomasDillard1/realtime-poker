@@ -1,7 +1,7 @@
 import { WebSocketServer as WSServer, WebSocket } from 'ws';
-import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO, GameStateDTO, Room } from '../types/index.js';
+import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO, GameStateDTO, Room, PlayerAction } from '../types/index.js';
 import { gameManager } from '../game/GameManager.js';
-import { startGame, getValidActions } from '../game/GameEngine.js';
+import { startGame, getValidActions, processAction, getActivePlayers } from '../game/GameEngine.js';
 
 interface ClientConnection {
   ws: WebSocket;
@@ -184,8 +184,81 @@ export class WebSocketHandler {
     console.log(`[${new Date().toISOString()}] Game started in room ${room.id}`);
   }
 
-  private handlePlayerAction(_ws: WebSocket, _payload: { roomId: string; playerId: string; action: unknown }): void {
-    // TODO: Implement player action logic
+  private handlePlayerAction(ws: WebSocket, payload: { roomId: string; playerId: string; action: PlayerAction }): void {
+    const room = gameManager.getRoom(payload.roomId);
+    if (!room || !room.gameState) {
+      this.sendError(ws, 'Game not found');
+      return;
+    }
+
+    const result = processAction(
+      room.gameState,
+      room.players,
+      payload.action.playerId,
+      payload.action.action,
+      payload.action.amount
+    );
+
+    if (!result.success) {
+      this.sendError(ws, result.error || 'Action failed');
+      return;
+    }
+
+    // Broadcast updated game state to all players
+    this.broadcastGameUpdate(room);
+
+    if (result.handComplete) {
+      // Hand is complete - determine winner
+      const activePlayers = getActivePlayers(room.gameState, room.players);
+
+      if (activePlayers.length === 1) {
+        // Everyone else folded - last player wins
+        const winner = activePlayers[0];
+        winner.chips += room.gameState.pot;
+
+        this.broadcastToRoom(room.id, {
+          type: 'hand-complete',
+          payload: {
+            winners: [{
+              playerId: winner.id,
+              amount: room.gameState.pot,
+              handResult: { playerId: winner.id, rank: 'high-card', cards: [], score: 0 },
+            }],
+            newGameState: this.toGameStateDTO(room, winner.id),
+          },
+        });
+      } else {
+        // Showdown - TODO: implement hand evaluation
+        // For now, first active player wins
+        const winner = activePlayers[0];
+        winner.chips += room.gameState.pot;
+
+        this.broadcastToRoom(room.id, {
+          type: 'hand-complete',
+          payload: {
+            winners: [{
+              playerId: winner.id,
+              amount: room.gameState.pot,
+              handResult: { playerId: winner.id, rank: 'high-card', cards: [], score: 0 },
+            }],
+            newGameState: this.toGameStateDTO(room, winner.id),
+          },
+        });
+      }
+
+      // Clear game state for new hand
+      room.gameState = null;
+    } else {
+      // Send action-required to current player
+      const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
+      const currentPlayer = room.players.get(currentPlayerId)!;
+      const validActions = getValidActions(room.gameState, currentPlayer);
+
+      this.broadcastToRoom(room.id, {
+        type: 'action-required',
+        payload: { playerId: currentPlayerId, validActions },
+      });
+    }
   }
 
   private createPlayer(name: string): Player {
@@ -257,6 +330,8 @@ export class WebSocketHandler {
       communityCards: gameState.communityCards,
       pot: gameState.pot,
       currentBet: gameState.currentBet,
+      minRaise: gameState.minRaise,
+      bigBlind: gameState.bigBlind,
       currentPlayerId,
       players: Array.from(room.players.values()).map((p) => this.toPlayerDTO(p)),
       myCards: player?.hand,
@@ -264,21 +339,26 @@ export class WebSocketHandler {
   }
 
   private broadcastGameState(room: Room): void {
-    let sentCount = 0;
-    console.log(`[${new Date().toISOString()}] Broadcasting game state to room ${room.id}, total clients: ${this.clients.size}`);
-
     for (const [, client] of this.clients) {
-      console.log(`  Client: playerId=${client.playerId}, roomId=${client.roomId}, match=${client.roomId === room.id}`);
       if (client.roomId === room.id && client.playerId) {
         const gameStateDTO = this.toGameStateDTO(room, client.playerId);
         this.send(client.ws, {
           type: 'game-started',
           payload: { gameState: gameStateDTO },
         });
-        sentCount++;
       }
     }
+  }
 
-    console.log(`[${new Date().toISOString()}] Sent game-started to ${sentCount} clients`);
+  private broadcastGameUpdate(room: Room): void {
+    for (const [, client] of this.clients) {
+      if (client.roomId === room.id && client.playerId) {
+        const gameStateDTO = this.toGameStateDTO(room, client.playerId);
+        this.send(client.ws, {
+          type: 'game-updated',
+          payload: { gameState: gameStateDTO },
+        });
+      }
+    }
   }
 }

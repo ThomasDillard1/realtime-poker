@@ -111,6 +111,8 @@ export interface GameStateDTO {
   communityCards: Card[];
   pot: number;
   currentBet: number;
+  minRaise: number;
+  bigBlind: number;
   currentPlayerId: string | null;
   players: PlayerDTO[];
   myCards?: Card[];

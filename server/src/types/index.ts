@@ -55,10 +55,14 @@ export interface GameState {
   communityCards: Card[];
   pot: number;
   currentBet: number;
+  minRaise: number;
+  bigBlind: number;
   currentPlayerIndex: number;
   dealerIndex: number;
   playerOrder: string[];
   roundBets: Map<string, number>;
+  playersActed: Set<string>;
+  lastRaiser: string | null;
   handNumber: number;
 }
 
@@ -165,6 +169,8 @@ export interface GameStateDTO {
   communityCards: Card[];
   pot: number;
   currentBet: number;
+  minRaise: number;
+  bigBlind: number;
   currentPlayerId: string | null;
   players: PlayerDTO[];
   myCards?: Card[];
