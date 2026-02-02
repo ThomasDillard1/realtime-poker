@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { Lobby } from './components/Lobby';
 import { Table } from './components/Table';
-import { RoomDTO, GameStateDTO, ActionType, PlayerDTO, ServerMessage } from './types';
+import { RoomDTO, GameStateDTO, ActionType, PlayerDTO, ServerMessage, HandCompletePayload } from './types';
 
 function App() {
   const [room, setRoom] = useState<RoomDTO | null>(null);
@@ -10,6 +10,7 @@ function App() {
   const [gameState, setGameState] = useState<GameStateDTO | null>(null);
   const [validActions, setValidActions] = useState<ActionType[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [handComplete, setHandComplete] = useState<HandCompletePayload | null>(null);
 
   const handleMessage = useCallback((message: ServerMessage) => {
     switch (message.type) {
@@ -51,6 +52,11 @@ function App() {
         break;
 
       case 'game-started':
+        setGameState(message.payload.gameState);
+        setHandComplete(null); // Clear previous hand result
+        setValidActions([]);
+        break;
+
       case 'game-updated':
         setGameState(message.payload.gameState);
         break;
@@ -60,7 +66,9 @@ function App() {
         break;
 
       case 'hand-complete':
-        setGameState(message.payload.newGameState);
+        setHandComplete(message.payload);
+        setGameState(null); // Game state cleared after hand completes
+        setValidActions([]);
         break;
 
       case 'error':
@@ -77,11 +85,12 @@ function App() {
       <p>Status: {isConnected ? 'Connected' : 'Disconnected'}</p>
       {error && <p style={{ color: 'red' }}>Error: {error}</p>}
 
-      {gameState ? (
+      {gameState || handComplete ? (
         <Table
           gameState={gameState}
           playerId={playerId!}
           validActions={validActions}
+          handComplete={handComplete}
           onSend={send}
         />
       ) : (

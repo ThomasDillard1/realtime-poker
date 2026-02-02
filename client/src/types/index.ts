@@ -62,6 +62,7 @@ export type ClientMessage =
   | { type: 'join-room'; payload: { roomId: string; playerName: string } }
   | { type: 'leave-room'; payload: { roomId: string; playerId: string } }
   | { type: 'start-game'; payload: { roomId: string } }
+  | { type: 'start-next-hand'; payload: { roomId: string } }
   | { type: 'player-action'; payload: { roomId: string; playerId: string; action: PlayerAction } };
 
 // ============================================
@@ -76,7 +77,7 @@ export type ServerMessage =
   | { type: 'game-started'; payload: { gameState: GameStateDTO } }
   | { type: 'game-updated'; payload: { gameState: GameStateDTO } }
   | { type: 'action-required'; payload: { playerId: string; validActions: ActionType[] } }
-  | { type: 'hand-complete'; payload: { winners: Winner[]; newGameState: GameStateDTO } }
+  | { type: 'hand-complete'; payload: HandCompletePayload }
   | { type: 'error'; payload: { message: string } };
 
 // ============================================
@@ -93,6 +94,19 @@ export interface PlayerDTO {
   isDealer: boolean;
   isSmallBlind: boolean;
   isBigBlind: boolean;
+}
+
+// Extended DTO that reveals cards at showdown
+export interface ShowdownPlayerDTO extends PlayerDTO {
+  hand: Card[];
+}
+
+export interface HandCompletePayload {
+  winners: Winner[];
+  players: ShowdownPlayerDTO[];
+  communityCards: Card[];
+  pot: number;
+  isShowdown: boolean;
 }
 
 export interface RoomDTO {

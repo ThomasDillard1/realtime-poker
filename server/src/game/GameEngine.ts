@@ -1,4 +1,4 @@
-import { Card, Suit, Rank, GameState, Player, ActionType, HandResult, Winner, Room } from '../types/index.js';
+import { Card, Suit, Rank, GameState, Player, ActionType, HandResult, HandRank, Winner, Room } from '../types/index.js';
 
 const SUITS: Suit[] = ['hearts', 'diamonds', 'clubs', 'spades'];
 const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
@@ -300,6 +300,18 @@ function advanceToNextPlayer(gameState: GameState, players: Map<string, Player>)
   }
 }
 
+// Check if any player can still make betting actions
+function canAnyoneAct(gameState: GameState, players: Map<string, Player>): boolean {
+  // Count players who are 'active' (not folded, not all-in)
+  const playersWhoCanAct = gameState.playerOrder
+    .map(id => players.get(id)!)
+    .filter(p => p.status === 'active');
+
+  // Need at least 2 players who can act for betting to continue
+  // If only 1 or 0 players can act, we should run out the board
+  return playersWhoCanAct.length >= 2;
+}
+
 function advancePhase(gameState: GameState, players: Map<string, Player>): boolean {
   // Reset for new betting round
   gameState.roundBets.clear();
@@ -328,21 +340,22 @@ function advancePhase(gameState: GameState, players: Map<string, Player>): boole
     }
   }
 
+  // Advance to next phase
   switch (gameState.phase) {
     case 'pre-flop':
       gameState.phase = 'flop';
       gameState.communityCards.push(...dealCards(gameState.deck, 3));
-      return false;
+      break;
 
     case 'flop':
       gameState.phase = 'turn';
       gameState.communityCards.push(...dealCards(gameState.deck, 1));
-      return false;
+      break;
 
     case 'turn':
       gameState.phase = 'river';
       gameState.communityCards.push(...dealCards(gameState.deck, 1));
-      return false;
+      break;
 
     case 'river':
       gameState.phase = 'showdown';
@@ -351,19 +364,303 @@ function advancePhase(gameState: GameState, players: Map<string, Player>): boole
     default:
       return true;
   }
+
+  // Check if anyone can still act - if not, keep advancing to showdown
+  if (!canAnyoneAct(gameState, players)) {
+    // All remaining players are all-in, run out the board
+    return advancePhase(gameState, players);
+  }
+
+  return false;
 }
 
-export function evaluateHand(_cards: Card[]): HandResult {
-  // TODO: Implement hand evaluation
+// Card value for comparison (2=2, ..., 10=10, J=11, Q=12, K=13, A=14)
+function cardValue(rank: Rank): number {
+  const values: Record<Rank, number> = {
+    '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
+    'J': 11, 'Q': 12, 'K': 13, 'A': 14,
+  };
+  return values[rank];
+}
+
+// Generate all 5-card combinations from cards
+function getCombinations(cards: Card[], size: number): Card[][] {
+  const result: Card[][] = [];
+
+  function combine(start: number, combo: Card[]) {
+    if (combo.length === size) {
+      result.push([...combo]);
+      return;
+    }
+    for (let i = start; i < cards.length; i++) {
+      combo.push(cards[i]);
+      combine(i + 1, combo);
+      combo.pop();
+    }
+  }
+
+  combine(0, []);
+  return result;
+}
+
+// Check for flush (5 cards of same suit)
+function isFlush(cards: Card[]): boolean {
+  const suit = cards[0].suit;
+  return cards.every(c => c.suit === suit);
+}
+
+// Check for straight (5 consecutive cards)
+function isStraight(cards: Card[]): boolean {
+  const values = cards.map(c => cardValue(c.rank)).sort((a, b) => a - b);
+
+  // Check for A-2-3-4-5 (wheel)
+  if (values[4] === 14 && values[0] === 2 && values[1] === 3 && values[2] === 4 && values[3] === 5) {
+    return true;
+  }
+
+  // Check consecutive
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] !== values[i - 1] + 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Get rank counts (e.g., {14: 2, 10: 3} means pair of aces, three 10s)
+function getRankCounts(cards: Card[]): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const card of cards) {
+    const val = cardValue(card.rank);
+    counts.set(val, (counts.get(val) || 0) + 1);
+  }
+  return counts;
+}
+
+// Score a 5-card hand (higher is better)
+function scoreHand(cards: Card[]): { rank: HandRank; score: number } {
+  const flush = isFlush(cards);
+  const straight = isStraight(cards);
+  const values = cards.map(c => cardValue(c.rank)).sort((a, b) => b - a);
+  const counts = getRankCounts(cards);
+  const countValues = Array.from(counts.entries()).sort((a, b) => {
+    // Sort by count desc, then by value desc
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return b[0] - a[0];
+  });
+
+  // Base score uses rank category (0-9) * 10^10 + kickers
+  let baseScore = 0;
+  let rank: HandRank = 'high-card';
+
+  // Royal flush: A-K-Q-J-10 of same suit
+  if (flush && straight && values[0] === 14 && values[4] === 10) {
+    rank = 'royal-flush';
+    baseScore = 9 * Math.pow(10, 10);
+  }
+  // Straight flush
+  else if (flush && straight) {
+    rank = 'straight-flush';
+    // Handle wheel (A-2-3-4-5) - 5 is high
+    const highCard = (values[0] === 14 && values[1] === 5) ? 5 : values[0];
+    baseScore = 8 * Math.pow(10, 10) + highCard;
+  }
+  // Four of a kind
+  else if (countValues[0][1] === 4) {
+    rank = 'four-of-a-kind';
+    baseScore = 7 * Math.pow(10, 10) + countValues[0][0] * Math.pow(10, 8) + countValues[1][0];
+  }
+  // Full house
+  else if (countValues[0][1] === 3 && countValues[1][1] === 2) {
+    rank = 'full-house';
+    baseScore = 6 * Math.pow(10, 10) + countValues[0][0] * Math.pow(10, 8) + countValues[1][0];
+  }
+  // Flush
+  else if (flush) {
+    rank = 'flush';
+    baseScore = 5 * Math.pow(10, 10);
+    for (let i = 0; i < 5; i++) {
+      baseScore += values[i] * Math.pow(10, 8 - i * 2);
+    }
+  }
+  // Straight
+  else if (straight) {
+    rank = 'straight';
+    // Handle wheel
+    const highCard = (values[0] === 14 && values[1] === 5) ? 5 : values[0];
+    baseScore = 4 * Math.pow(10, 10) + highCard;
+  }
+  // Three of a kind
+  else if (countValues[0][1] === 3) {
+    rank = 'three-of-a-kind';
+    baseScore = 3 * Math.pow(10, 10) + countValues[0][0] * Math.pow(10, 8);
+    // Add kickers
+    const kickers = countValues.slice(1).map(c => c[0]).sort((a, b) => b - a);
+    baseScore += kickers[0] * Math.pow(10, 6) + kickers[1] * Math.pow(10, 4);
+  }
+  // Two pair
+  else if (countValues[0][1] === 2 && countValues[1][1] === 2) {
+    rank = 'two-pair';
+    const highPair = Math.max(countValues[0][0], countValues[1][0]);
+    const lowPair = Math.min(countValues[0][0], countValues[1][0]);
+    const kicker = countValues[2][0];
+    baseScore = 2 * Math.pow(10, 10) + highPair * Math.pow(10, 8) + lowPair * Math.pow(10, 6) + kicker;
+  }
+  // Pair
+  else if (countValues[0][1] === 2) {
+    rank = 'pair';
+    baseScore = 1 * Math.pow(10, 10) + countValues[0][0] * Math.pow(10, 8);
+    // Add kickers
+    const kickers = countValues.slice(1).map(c => c[0]).sort((a, b) => b - a);
+    baseScore += kickers[0] * Math.pow(10, 6) + kickers[1] * Math.pow(10, 4) + kickers[2] * Math.pow(10, 2);
+  }
+  // High card
+  else {
+    rank = 'high-card';
+    for (let i = 0; i < 5; i++) {
+      baseScore += values[i] * Math.pow(10, 8 - i * 2);
+    }
+  }
+
+  return { rank, score: baseScore };
+}
+
+export function evaluateHand(cards: Card[], playerId: string = ''): HandResult {
+  if (cards.length < 5) {
+    return { playerId, rank: 'high-card', cards: [], score: 0 };
+  }
+
+  // Get all 5-card combinations and find the best one
+  const combinations = getCombinations(cards, 5);
+  let bestResult = { rank: 'high-card' as HandRank, score: 0 };
+  let bestCards: Card[] = [];
+
+  for (const combo of combinations) {
+    const result = scoreHand(combo);
+    if (result.score > bestResult.score) {
+      bestResult = result;
+      bestCards = combo;
+    }
+  }
+
   return {
-    playerId: '',
-    rank: 'high-card',
-    cards: [],
-    score: 0,
+    playerId,
+    rank: bestResult.rank,
+    cards: bestCards,
+    score: bestResult.score,
   };
 }
 
-export function determineWinners(_gameState: GameState, _players: Map<string, Player>): Winner[] {
-  // TODO: Implement winner determination
-  return [];
+export function determineWinners(gameState: GameState, players: Map<string, Player>): Winner[] {
+  const activePlayers = getActivePlayers(gameState, players);
+  const results: { player: Player; handResult: HandResult }[] = [];
+
+  // Evaluate each active player's hand
+  for (const player of activePlayers) {
+    const allCards = [...player.hand, ...gameState.communityCards];
+    const handResult = evaluateHand(allCards, player.id);
+    results.push({ player, handResult });
+  }
+
+  // Sort by score descending
+  results.sort((a, b) => b.handResult.score - a.handResult.score);
+
+  // Find all players with the highest score (could be a tie)
+  const highestScore = results[0].handResult.score;
+  const winners = results.filter(r => r.handResult.score === highestScore);
+
+  // Split pot among winners
+  const potShare = Math.floor(gameState.pot / winners.length);
+
+  return winners.map(w => ({
+    playerId: w.player.id,
+    amount: potShare,
+    handResult: w.handResult,
+  }));
+}
+
+export function startNextHand(room: Room, previousDealerIndex: number): GameState | null {
+  const players = room.players;
+
+  // Mark players with no chips as 'out'
+  for (const player of players.values()) {
+    if (player.chips <= 0) {
+      player.status = 'out';
+    }
+  }
+
+  // Get eligible players (those with chips)
+  const eligiblePlayers = Array.from(players.values()).filter(p => p.status !== 'out');
+
+  if (eligiblePlayers.length < 2) {
+    // Not enough players to continue
+    return null;
+  }
+
+  // Build new player order from eligible players, maintaining original order
+  const playerOrder = Array.from(players.keys()).filter(id => {
+    const player = players.get(id)!;
+    return player.status !== 'out';
+  });
+
+  const numPlayers = playerOrder.length;
+  const deck = createDeck();
+
+  // Rotate dealer to next eligible player
+  let dealerIndex = (previousDealerIndex + 1) % numPlayers;
+
+  // Calculate positions (wrap around)
+  const smallBlindIndex = (dealerIndex + 1) % numPlayers;
+  const bigBlindIndex = (dealerIndex + 2) % numPlayers;
+  const firstToActIndex = numPlayers === 2
+    ? smallBlindIndex  // Heads-up: SB acts first pre-flop
+    : (dealerIndex + 3) % numPlayers;
+
+  // Reset and set up all players
+  for (const [i, playerId] of playerOrder.entries()) {
+    const player = players.get(playerId)!;
+    player.hand = dealCards(deck, 2);
+    player.status = 'active';
+    player.bet = 0;
+    player.isDealer = i === dealerIndex;
+    player.isSmallBlind = i === smallBlindIndex;
+    player.isBigBlind = i === bigBlindIndex;
+  }
+
+  // Create game state
+  const gameState: GameState = {
+    roomId: room.id,
+    phase: 'pre-flop',
+    deck,
+    communityCards: [],
+    pot: 0,
+    currentBet: room.bigBlind,
+    minRaise: room.bigBlind,
+    bigBlind: room.bigBlind,
+    currentPlayerIndex: firstToActIndex,
+    dealerIndex,
+    playerOrder,
+    roundBets: new Map(),
+    playersActed: new Set(),
+    lastRaiser: playerOrder[bigBlindIndex],
+    handNumber: (room.gameState?.handNumber || 0) + 1,
+  };
+
+  // Post blinds
+  const sbPlayer = players.get(playerOrder[smallBlindIndex])!;
+  const bbPlayer = players.get(playerOrder[bigBlindIndex])!;
+
+  const sbAmount = Math.min(sbPlayer.chips, room.smallBlind);
+  sbPlayer.chips -= sbAmount;
+  sbPlayer.bet = sbAmount;
+  gameState.roundBets.set(sbPlayer.id, sbAmount);
+  gameState.pot += sbAmount;
+
+  const bbAmount = Math.min(bbPlayer.chips, room.bigBlind);
+  bbPlayer.chips -= bbAmount;
+  bbPlayer.bet = bbAmount;
+  gameState.roundBets.set(bbPlayer.id, bbAmount);
+  gameState.pot += bbAmount;
+
+  return gameState;
 }
