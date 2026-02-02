@@ -106,8 +106,6 @@ function App() {
 
   return (
     <div>
-      <h1>Poker</h1>
-      <p>Status: {isConnected ? 'Connected' : 'Disconnected'}</p>
       {error && <p style={{ color: 'red' }}>Error: {error}</p>}
 
       {gameState || handComplete || gameOver ? (
@@ -115,6 +113,7 @@ function App() {
           gameState={gameState}
           playerId={playerId!}
           roomId={room?.id || ''}
+          roomName={room?.name || ''}
           validActions={validActions}
           handComplete={handComplete}
           gameOver={gameOver}

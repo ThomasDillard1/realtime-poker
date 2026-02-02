@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { GameStateDTO, ActionType, ClientMessage, Card, HandCompletePayload, ShowdownPlayerDTO, GameOverPayload } from '../types';
+import { GameStateDTO, ActionType, ClientMessage, HandCompletePayload, ShowdownPlayerDTO, GameOverPayload } from '../types';
+import { CardDisplay, CardHand } from './CardDisplay';
 
 interface TableProps {
   gameState: GameStateDTO | null;
   playerId: string;
   roomId: string;
+  roomName: string;
   validActions: ActionType[];
   handComplete: HandCompletePayload | null;
   gameOver: GameOverPayload | null;
@@ -28,12 +30,7 @@ function formatHandRank(rank: string): string {
   return formatted[rank] || rank;
 }
 
-// Format cards for display
-function formatCards(cards: Card[]): string {
-  return cards.map(c => `${c.rank}${c.suit[0].toUpperCase()}`).join(' ');
-}
-
-export function Table({ gameState, playerId, roomId, validActions, handComplete, gameOver, onSend }: TableProps) {
+export function Table({ gameState, playerId, roomId, roomName, validActions, handComplete, gameOver, onSend }: TableProps) {
   const [betAmount, setBetAmount] = useState<number>(0);
 
   // If game is over, show the game over screen
@@ -91,34 +88,87 @@ export function Table({ gameState, playerId, roomId, validActions, handComplete,
 
   return (
     <div>
-      <h2>Poker Table</h2>
-      <p>Phase: {gameState.phase}</p>
-      <p>Pot: {gameState.pot}</p>
-      <p>Current Bet: {gameState.currentBet}</p>
+      <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>{roomName}</h2>
 
-      <div>
-        <h3>Community Cards</h3>
-        <div>
-          {gameState.communityCards.map((card, i) => (
-            <span key={i}>
-              {card.rank}{card.suit[0].toUpperCase()}{' '}
-            </span>
-          ))}
-          {gameState.communityCards.length === 0 && <span>No cards yet</span>}
+      {/* Poker Table */}
+      <div style={{
+        width: '100%',
+        maxWidth: '600px',
+        height: '280px',
+        margin: '0 auto 30px auto',
+        background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 50%, #1a472a 100%)',
+        borderRadius: '150px / 100px',
+        border: '12px solid #5d4037',
+        boxShadow: 'inset 0 0 50px rgba(0,0,0,0.3), 0 8px 20px rgba(0,0,0,0.4)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+      }}>
+        {/* Pot Display */}
+        <div style={{
+          color: '#ffd700',
+          fontSize: '20px',
+          fontWeight: 'bold',
+          textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
+          marginBottom: '15px',
+        }}>
+          Pot: ${gameState.pot}
         </div>
+
+        {/* Community Cards */}
+        <div style={{
+          display: 'flex',
+          gap: '8px',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '100px',
+        }}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} style={{
+              width: '62px',
+              height: '86px',
+              backgroundColor: 'rgba(0,0,0,0.2)',
+              borderRadius: '6px',
+              border: '2px dashed rgba(255,255,255,0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              {gameState.communityCards[i] && (
+                <CardDisplay card={gameState.communityCards[i]} height="82px" />
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Current Bet Display */}
+        {gameState.currentBet > 0 && (
+          <div style={{
+            color: '#fff',
+            fontSize: '14px',
+            marginTop: '15px',
+            opacity: 0.8,
+          }}>
+            Current Bet: ${gameState.currentBet}
+          </div>
+        )}
       </div>
 
-      <div>
+      {/* Your Cards */}
+      <div style={{ marginBottom: '20px', textAlign: 'center' }}>
         <h3>Your Cards</h3>
-        <div>
-          {gameState.myCards?.map((card, i) => (
-            <span key={i}>
-              {card.rank}{card.suit[0].toUpperCase()}{' '}
-            </span>
-          ))}
-        </div>
+        {gameState.myCards && gameState.myCards.length > 0 ? (
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <CardHand cards={gameState.myCards} height="110px" />
+          </div>
+        ) : (
+          <p style={{ color: '#666' }}>No cards</p>
+        )}
       </div>
 
+      {/* Players */}
       <div>
         <h3>Players</h3>
         <ul>
@@ -257,20 +307,24 @@ function ShowdownView({ handComplete, playerId }: ShowdownViewProps) {
         </h3>
         <p>Pot: {pot}</p>
         {winners.map((winner, i) => (
-          <div key={i} style={{ marginBottom: '8px' }}>
-            <strong>{getPlayerName(winner.playerId)}</strong>
-            {winner.playerId === playerId && ' (You)'}
-            {' wins '}
-            <strong>{winner.amount}</strong>
-            {' chips'}
-            {isShowdown && winner.handResult.rank && (
-              <>
-                {' with '}
-                <strong>{formatHandRank(winner.handResult.rank)}</strong>
-                {winner.handResult.cards.length > 0 && (
-                  <span> ({formatCards(winner.handResult.cards)})</span>
-                )}
-              </>
+          <div key={i} style={{ marginBottom: '12px' }}>
+            <div>
+              <strong>{getPlayerName(winner.playerId)}</strong>
+              {winner.playerId === playerId && ' (You)'}
+              {' wins '}
+              <strong>{winner.amount}</strong>
+              {' chips'}
+              {isShowdown && winner.handResult.rank && (
+                <>
+                  {' with '}
+                  <strong>{formatHandRank(winner.handResult.rank)}</strong>
+                </>
+              )}
+            </div>
+            {isShowdown && winner.handResult.cards.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <CardHand cards={winner.handResult.cards} height="60px" gap="4px" />
+              </div>
             )}
           </div>
         ))}
@@ -279,33 +333,36 @@ function ShowdownView({ handComplete, playerId }: ShowdownViewProps) {
       {/* Community Cards */}
       <div>
         <h3>Community Cards</h3>
-        <div>
-          {communityCards.map((card, i) => (
-            <span key={i}>
-              {card.rank}{card.suit[0].toUpperCase()}{' '}
-            </span>
-          ))}
-          {communityCards.length === 0 && <span>No cards</span>}
-        </div>
+        {communityCards.length > 0 ? (
+          <CardHand cards={communityCards} height="80px" />
+        ) : (
+          <p style={{ color: '#666' }}>No cards</p>
+        )}
       </div>
 
       {/* Player hands at showdown */}
       {isShowdown && (
         <div>
           <h3>Player Hands</h3>
-          <ul>
-            {players
-              .filter((p): p is ShowdownPlayerDTO => p.hand && p.hand.length > 0)
-              .map((p) => (
-                <li key={p.id}>
+          {players
+            .filter((p): p is ShowdownPlayerDTO => p.hand && p.hand.length > 0)
+            .map((p) => (
+              <div key={p.id} style={{
+                marginBottom: '15px',
+                padding: '10px',
+                backgroundColor: winners.some(w => w.playerId === p.id) ? '#e8f5e9' : '#f5f5f5',
+                borderRadius: '8px',
+                border: winners.some(w => w.playerId === p.id) ? '2px solid #4caf50' : '1px solid #ddd',
+              }}>
+                <div style={{ marginBottom: '8px' }}>
                   <strong>{p.name}</strong>
                   {p.id === playerId && ' (You)'}
-                  : {formatCards(p.hand)}
                   {' - '}{p.chips} chips
-                  {winners.some(w => w.playerId === p.id) && ' - WINNER!'}
-                </li>
-              ))}
-          </ul>
+                  {winners.some(w => w.playerId === p.id) && <span style={{ color: '#4caf50', marginLeft: '10px' }}>WINNER!</span>}
+                </div>
+                <CardHand cards={p.hand} height="70px" />
+              </div>
+            ))}
         </div>
       )}
 
