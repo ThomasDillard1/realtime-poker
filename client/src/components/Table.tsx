@@ -617,11 +617,14 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
 
           {/* Pot Display */}
           <div style={{
-            color: '#ffd700',
-            fontSize: '20px',
-            fontWeight: 'bold',
-            textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            borderRadius: '20px',
+            padding: '8px 28px',
             marginBottom: '15px',
+            color: '#fff',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            letterSpacing: '0.5px',
           }}>
             Pot: ${gameState.pot}
           </div>
@@ -676,7 +679,6 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
               left: 0,
               right: 0,
               bottom: 0,
-              backgroundColor: 'rgba(0, 0, 0, 0.75)',
               borderRadius: '150px / 100px',
               display: 'flex',
               flexDirection: 'column',
@@ -689,14 +691,21 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                 const isWinner = winners.some(w => w.playerId === playerId);
 
                 return (
-                  <>
+                  <div style={{
+                    backgroundColor: '#000',
+                    border: '1px solid rgba(255,255,255,0.3)',
+                    borderRadius: '12px',
+                    padding: '20px 32px',
+                    textAlign: 'center',
+                  }}>
                     {/* Result Title */}
                     <div style={{
-                      fontSize: '24px',
+                      fontSize: '20px',
                       fontWeight: 'bold',
-                      color: isWinner ? '#4caf50' : '#fff',
-                      marginBottom: '12px',
-                      textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+                      color: isWinner ? '#a5d6a7' : 'rgba(255,255,255,0.9)',
+                      marginBottom: '10px',
+                      letterSpacing: '1px',
+                      textTransform: 'uppercase',
                     }}>
                       {isWinner ? 'You Won!' : 'Hand Complete'}
                     </div>
@@ -704,35 +713,26 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                     {/* Winner Info */}
                     {winners.map((winner, i) => (
                       <div key={i} style={{
-                        color: '#ffd700',
-                        fontSize: '16px',
-                        marginBottom: '8px',
-                        textAlign: 'center',
+                        color: 'rgba(255,255,255,0.85)',
+                        fontSize: '14px',
+                        marginBottom: '6px',
                       }}>
-                        <span style={{ fontWeight: 'bold' }}>
+                        <span style={{ fontWeight: 'bold', color: '#fff' }}>
                           {gameState.players.find(p => p.id === winner.playerId)?.name || 'Unknown'}
                         </span>
                         {' wins '}
-                        <span style={{ fontWeight: 'bold', color: '#4caf50' }}>
+                        <span style={{ fontWeight: 'bold', color: '#a5d6a7' }}>
                           ${winner.amount}
                         </span>
                         {isShowdown && winner.handResult?.rank && (
-                          <span style={{ color: '#fff' }}>
+                          <span>
                             {' with '}{formatHandRank(winner.handResult.rank)}
                           </span>
                         )}
                       </div>
                     ))}
 
-                    {/* Next Hand Indicator */}
-                    <div style={{
-                      marginTop: '16px',
-                      color: 'rgba(255,255,255,0.7)',
-                      fontSize: '14px',
-                    }}>
-                      Next hand starting soon...
-                    </div>
-                  </>
+                  </div>
                 );
               })()}
             </div>
@@ -740,44 +740,47 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
         </div>
       </div>
 
-      {/* Action panel - fixed at bottom right, compact square design */}
+      {/* Action panel - fixed at bottom right */}
       {isMyTurn && (
         <div style={{
           position: 'fixed',
           bottom: '20px',
           right: '20px',
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          padding: '12px',
-          borderRadius: '10px',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          backgroundColor: '#f5f5f5',
+          padding: '12px 14px',
+          borderRadius: '12px',
+          border: '1px solid #ddd',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
           zIndex: 100,
-          width: '175px',
+          width: '380px',
         }}>
-          {/* Header */}
-          <div style={{
-            fontSize: '12px',
-            fontWeight: 'bold',
-            color: '#333',
-            textAlign: 'center',
-            marginBottom: '10px',
-            paddingBottom: '8px',
-            borderBottom: '1px solid #eee',
-          }}>
-            Your Turn
-          </div>
-
-          {/* Buttons grid - all 4 always visible */}
+          {/* Action buttons - single row */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '8px',
+            gridTemplateColumns: '1fr 1fr 1fr 1fr',
+            gap: '6px',
+            marginBottom: '8px',
           }}>
-            {/* Check button */}
+            <button
+              onClick={() => validActions.includes('fold') && handleAction('fold')}
+              disabled={!validActions.includes('fold')}
+              style={{
+                padding: '8px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: '#f44336',
+                color: 'white',
+                cursor: validActions.includes('fold') ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+                fontSize: '13px',
+                opacity: validActions.includes('fold') ? 1 : 0.35,
+              }}>Fold</button>
+
             <button
               onClick={() => validActions.includes('check') && handleAction('check')}
               disabled={!validActions.includes('check')}
               style={{
-                padding: '10px 8px',
+                padding: '8px',
                 borderRadius: '6px',
                 border: 'none',
                 backgroundColor: '#4caf50',
@@ -788,12 +791,11 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                 opacity: validActions.includes('check') ? 1 : 0.35,
               }}>Check</button>
 
-            {/* Call button */}
             <button
               onClick={() => validActions.includes('call') && handleAction('call')}
               disabled={!validActions.includes('call')}
               style={{
-                padding: '10px 8px',
+                padding: '8px',
                 borderRadius: '6px',
                 border: 'none',
                 backgroundColor: '#2196f3',
@@ -806,28 +808,11 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
               {validActions.includes('call') ? `Call $${toCall}` : 'Call'}
             </button>
 
-            {/* Fold button */}
-            <button
-              onClick={() => validActions.includes('fold') && handleAction('fold')}
-              disabled={!validActions.includes('fold')}
-              style={{
-                padding: '10px 8px',
-                borderRadius: '6px',
-                border: 'none',
-                backgroundColor: '#f44336',
-                color: 'white',
-                cursor: validActions.includes('fold') ? 'pointer' : 'not-allowed',
-                fontWeight: 'bold',
-                fontSize: '13px',
-                opacity: validActions.includes('fold') ? 1 : 0.35,
-              }}>Fold</button>
-
-            {/* All-In button */}
             <button
               onClick={() => validActions.includes('all-in') && handleAction('all-in')}
               disabled={!validActions.includes('all-in')}
               style={{
-                padding: '10px 8px',
+                padding: '8px',
                 borderRadius: '6px',
                 border: 'none',
                 backgroundColor: '#9c27b0',
@@ -847,13 +832,9 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
             const currentBetValue = betAmount || effectiveMinBet;
 
             return (
-              <div style={{ marginTop: '8px' }}>
-                {/* Pot-based quick buttons */}
-                <div style={{
-                  display: 'flex',
-                  gap: '4px',
-                  marginBottom: '6px',
-                }}>
+              <div style={{ borderTop: '1px solid #ddd', paddingTop: '8px' }}>
+                {/* Pot presets + slider row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px' }}>
                   {[
                     { label: '1/2', mult: 0.5 },
                     { label: '3/4', mult: 0.75 },
@@ -868,11 +849,10 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                         onClick={() => !isDisabled && setBetAmount(actualBet)}
                         disabled={isDisabled}
                         style={{
-                          flex: 1,
-                          padding: '6px 4px',
+                          padding: '4px 8px',
                           borderRadius: '4px',
                           border: '1px solid #ddd',
-                          backgroundColor: isDisabled ? '#f5f5f5' : '#f5f5f5',
+                          backgroundColor: '#fff',
                           color: isDisabled ? '#bbb' : '#333',
                           cursor: isDisabled ? 'not-allowed' : 'pointer',
                           fontSize: '11px',
@@ -884,10 +864,6 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                       </button>
                     );
                   })}
-                </div>
-
-                {/* Bet slider */}
-                <div style={{ marginBottom: '8px' }}>
                   <input
                     type="range"
                     min={effectiveMinBet}
@@ -895,20 +871,16 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                     value={currentBetValue}
                     onChange={(e) => setBetAmount(Number(e.target.value))}
                     style={{
-                      width: '100%',
-                      height: '6px',
-                      borderRadius: '3px',
+                      flex: 1,
+                      height: '4px',
                       cursor: 'pointer',
                       accentColor: '#ff9800',
                     }}
                   />
                 </div>
 
-                {/* Input and raise button */}
-                <div style={{
-                  display: 'flex',
-                  gap: '6px',
-                }}>
+                {/* Amount input + raise button row */}
+                <div style={{ display: 'flex', gap: '6px' }}>
                   <input
                     type="number"
                     min={effectiveMinBet}
@@ -917,11 +889,14 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                     onChange={(e) => setBetAmount(Number(e.target.value))}
                     style={{
                       width: '70px',
-                      padding: '8px',
-                      borderRadius: '6px',
+                      padding: '6px',
+                      borderRadius: '4px',
                       border: '1px solid #ddd',
+                      backgroundColor: '#fff',
+                      color: '#333',
                       fontSize: '13px',
                       textAlign: 'center',
+                      outline: 'none',
                     }}
                   />
                   <button
@@ -932,7 +907,7 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                     disabled={currentBetValue < effectiveMinBet}
                     style={{
                       flex: 1,
-                      padding: '8px',
+                      padding: '6px',
                       borderRadius: '6px',
                       border: 'none',
                       backgroundColor: '#ff9800',
@@ -964,7 +939,6 @@ interface GameOverViewProps {
 
 function GameOverView({ gameOver, playerId, roomId, onSend }: GameOverViewProps) {
   const { winner, players } = gameOver;
-  const isWinner = winner.id === playerId;
 
   const handleLeaveRoom = () => {
     onSend({
@@ -974,67 +948,122 @@ function GameOverView({ gameOver, playerId, roomId, onSend }: GameOverViewProps)
   };
 
   return (
-    <div>
-      <h2>Game Over!</h2>
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 40%, #1a472a 100%)',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'flex-start',
+      paddingTop: '60px',
+      boxSizing: 'border-box',
+    }}>
+      <div style={{ width: '420px', maxWidth: '90vw' }}>
+        <h2 style={{
+          color: 'rgba(255,255,255,0.9)',
+          fontSize: '28px',
+          fontWeight: 'bold',
+          letterSpacing: '2px',
+          textTransform: 'uppercase',
+          textAlign: 'center',
+          marginBottom: '30px',
+        }}>
+          Final Results
+        </h2>
 
-      {/* Winner announcement */}
-      <div style={{
-        backgroundColor: isWinner ? '#e8f5e9' : '#fff8e1',
-        padding: '20px',
-        borderRadius: '8px',
-        margin: '10px 0',
-        border: `2px solid ${isWinner ? '#4caf50' : '#ffc107'}`,
-        textAlign: 'center',
-      }}>
-        <h3 style={{ margin: '0 0 10px 0', color: isWinner ? '#2e7d32' : '#f57f17', fontSize: '24px' }}>
-          {isWinner ? '🏆 You Won the Game! 🏆' : `${winner.name} Wins!`}
-        </h3>
-        <p style={{ fontSize: '18px' }}>
-          Final chips: <strong>{winner.chips}</strong>
-        </p>
-      </div>
+        {/* Winner announcement */}
+        <div style={{
+          backgroundColor: 'rgba(0,0,0,0.3)',
+          border: '1px solid rgba(255,255,255,0.2)',
+          borderRadius: '10px',
+          padding: '20px',
+          textAlign: 'center',
+          marginBottom: '24px',
+        }}>
+          <div style={{
+            color: '#a5d6a7',
+            fontSize: '20px',
+            fontWeight: 'bold',
+            marginBottom: '6px',
+          }}>
+            {winner.name} Wins!
+          </div>
+          <div style={{
+            color: 'rgba(255,255,255,0.6)',
+            fontSize: '14px',
+          }}>
+            Final chips: <span style={{ color: '#fff', fontWeight: 'bold' }}>{winner.chips}</span>
+          </div>
+        </div>
 
-      {/* Final standings */}
-      <div>
-        <h3>Final Standings</h3>
-        <ol style={{ fontSize: '16px' }}>
-          {players.map((p, index) => (
-            <li
-              key={p.id}
-              style={{
-                padding: '8px',
-                marginBottom: '4px',
-                backgroundColor: index === 0 ? '#fff9c4' : p.id === playerId ? '#e3f2fd' : 'transparent',
-                borderRadius: '4px',
-              }}
-            >
-              <strong>{p.name}</strong>
-              {p.id === playerId && ' (You)'}
-              {' - '}
-              {p.chips} chips
-              {index === 0 && ' 👑'}
-              {p.chips === 0 && ' (Eliminated)'}
-            </li>
-          ))}
-        </ol>
-      </div>
+        {/* Final standings */}
+        <div style={{ marginBottom: '28px' }}>
+          <h3 style={{
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: '14px',
+            fontWeight: '600',
+            textTransform: 'uppercase',
+            letterSpacing: '1px',
+            marginBottom: '12px',
+          }}>
+            Final Standings
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {players.map((p, index) => (
+              <div
+                key={p.id}
+                style={{
+                  padding: '12px 16px',
+                  backgroundColor: 'rgba(0,0,0,0.2)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{
+                    color: 'rgba(255,255,255,0.4)',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    width: '20px',
+                  }}>
+                    {index + 1}.
+                  </span>
+                  <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '14px' }}>
+                    {p.name}{index === 0 && ' 👑'}
+                  </span>
+                </div>
+                <span style={{
+                  color: p.chips > 0 ? 'rgba(255,255,255,0.7)' : '#ef5350',
+                  fontSize: '13px',
+                }}>
+                  {p.chips > 0 ? `$${p.chips}` : 'Eliminated'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
 
-      {/* Return to lobby button */}
-      <div style={{ marginTop: '30px', textAlign: 'center' }}>
-        <button
-          onClick={handleLeaveRoom}
-          style={{
-            padding: '12px 24px',
-            fontSize: '16px',
-            backgroundColor: '#2196f3',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-          }}
-        >
-          Return to Lobby
-        </button>
+        {/* Return to lobby button */}
+        <div style={{ textAlign: 'center' }}>
+          <button
+            onClick={handleLeaveRoom}
+            style={{
+              padding: '12px 28px',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              backgroundColor: 'rgba(255,255,255,0.15)',
+              color: '#fff',
+              border: '1px solid rgba(255,255,255,0.3)',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Return to Lobby
+          </button>
+        </div>
       </div>
     </div>
   );
