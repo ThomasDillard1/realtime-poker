@@ -4,9 +4,10 @@ import { ClientMessage, RoomDTO } from '../types';
 interface LobbyProps {
   onSend: (message: ClientMessage) => void;
   availableRooms: RoomDTO[];
+  pendingRejoin: { roomId: string; playerId: string } | null;
 }
 
-export function Lobby({ onSend, availableRooms }: LobbyProps) {
+export function Lobby({ onSend, availableRooms, pendingRejoin }: LobbyProps) {
   const [playerName, setPlayerName] = useState('');
   const [roomName, setRoomName] = useState('');
 
@@ -50,6 +51,39 @@ export function Lobby({ onSend, availableRooms }: LobbyProps) {
         }}>
           Poker Lobby
         </h2>
+
+        {/* Rejoin banner */}
+        {pendingRejoin && (
+          <div
+            onClick={() => onSend({ type: 'rejoin-game', payload: pendingRejoin })}
+            style={{
+              marginBottom: '24px',
+              padding: '14px 20px',
+              backgroundColor: 'rgba(76, 175, 80, 0.15)',
+              border: '1px solid rgba(76, 175, 80, 0.4)',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              transition: 'background-color 0.15s ease',
+            }}
+          >
+            <span style={{ color: '#fff', fontSize: '14px', fontWeight: '500' }}>
+              You have an active game
+            </span>
+            <span style={{
+              color: '#fff',
+              fontWeight: 'bold',
+              fontSize: '12px',
+              backgroundColor: '#4caf50',
+              padding: '6px 16px',
+              borderRadius: '4px',
+            }}>
+              Rejoin
+            </span>
+          </div>
+        )}
 
         {/* Player name input */}
         <div style={{ marginBottom: '28px' }}>

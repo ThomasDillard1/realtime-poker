@@ -27,6 +27,7 @@ export interface Player {
   isDealer: boolean;
   isSmallBlind: boolean;
   isBigBlind: boolean;
+  isAway: boolean;
 }
 
 // ============================================
@@ -119,7 +120,9 @@ export type ClientMessage =
   | { type: 'start-game'; payload: { roomId: string } }
   | { type: 'start-next-hand'; payload: { roomId: string } }
   | { type: 'player-action'; payload: { roomId: string; playerId: string; action: PlayerAction } }
-  | { type: 'get-rooms'; payload: Record<string, never> };
+  | { type: 'get-rooms'; payload: Record<string, never> }
+  | { type: 'leave-game'; payload: { roomId: string; playerId: string } }
+  | { type: 'rejoin-game'; payload: { roomId: string; playerId: string } };
 
 // ============================================
 // SERVER → CLIENT MESSAGES
@@ -136,7 +139,10 @@ export type ServerMessage =
   | { type: 'hand-complete'; payload: HandCompletePayload }
   | { type: 'game-over'; payload: GameOverPayload }
   | { type: 'rooms-list'; payload: { rooms: RoomDTO[] } }
-  | { type: 'error'; payload: { message: string } };
+  | { type: 'error'; payload: { message: string } }
+  | { type: 'left-game'; payload: { roomId: string; playerId: string } }
+  | { type: 'player-away'; payload: { roomId: string; playerId: string; isAway: boolean } }
+  | { type: 'game-rejoined'; payload: { room: RoomDTO; playerId: string; gameState?: GameStateDTO; handComplete?: HandCompletePayload } };
 
 export interface GameOverPayload {
   winner: PlayerDTO;
@@ -165,6 +171,7 @@ export interface PlayerDTO {
   isDealer: boolean;
   isSmallBlind: boolean;
   isBigBlind: boolean;
+  isAway: boolean;
 }
 
 // Extended DTO that reveals cards at showdown

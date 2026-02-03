@@ -75,6 +75,12 @@ export class WebSocketHandler {
       case 'get-rooms':
         this.handleGetRooms(ws);
         break;
+      case 'leave-game':
+        this.handleLeaveGame(ws, message.payload);
+        break;
+      case 'rejoin-game':
+        this.handleRejoinGame(ws, message.payload);
+        break;
       default:
         this.sendError(ws, 'Unknown message type');
     }
@@ -164,6 +170,152 @@ export class WebSocketHandler {
 
     // Broadcast updated room list to lobby clients
     this.broadcastRoomsList();
+  }
+
+  private handleLeaveGame(ws: WebSocket, payload: { roomId: string; playerId: string }): void {
+    const room = gameManager.getRoom(payload.roomId);
+    if (!room) {
+      this.sendError(ws, 'Room not found');
+      return;
+    }
+
+    const player = room.players.get(payload.playerId);
+    if (!player) {
+      this.sendError(ws, 'Player not found in room');
+      return;
+    }
+
+    // Mark player as away
+    player.isAway = true;
+
+    // Handle in-progress hand
+    if (room.gameState) {
+      const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
+
+      if (currentPlayerId === payload.playerId) {
+        // It's their turn — process fold immediately
+        this.clearActionTimer(room.id);
+        const result = processAction(
+          room.gameState,
+          room.players,
+          payload.playerId,
+          'fold',
+          undefined
+        );
+
+        if (result.success) {
+          this.broadcastGameUpdate(room);
+
+          if (result.handComplete) {
+            // Send left-game before hand-complete processing so client transitions to lobby
+            this.send(ws, {
+              type: 'left-game',
+              payload: { roomId: payload.roomId, playerId: payload.playerId },
+            });
+
+            const client = this.clients.get(ws);
+            if (client) {
+              client.roomId = null;
+              client.playerId = null;
+            }
+
+            this.broadcastToRoom(payload.roomId, {
+              type: 'player-away',
+              payload: { roomId: payload.roomId, playerId: payload.playerId, isAway: true },
+            });
+
+            this.handleHandComplete(room);
+            return;
+          } else {
+            // Send action-required to next player
+            this.sendActionRequired(room);
+          }
+        }
+      } else if (player.status === 'active') {
+        // Not their turn but still active in hand — fold them
+        player.status = 'folded';
+        this.broadcastGameUpdate(room);
+      }
+      // If all-in, leave them as all-in for this hand
+    }
+
+    // Send left-game confirmation to leaving player
+    this.send(ws, {
+      type: 'left-game',
+      payload: { roomId: payload.roomId, playerId: payload.playerId },
+    });
+
+    // Clear client's room/player association
+    const client = this.clients.get(ws);
+    if (client) {
+      client.roomId = null;
+      client.playerId = null;
+    }
+
+    // Broadcast away status to remaining room members
+    this.broadcastToRoom(payload.roomId, {
+      type: 'player-away',
+      payload: { roomId: payload.roomId, playerId: payload.playerId, isAway: true },
+    });
+
+    console.log(`[${new Date().toISOString()}] Player ${player.name} (${player.id}) left game in room ${payload.roomId} (marked away)`);
+  }
+
+  private handleRejoinGame(ws: WebSocket, payload: { roomId: string; playerId: string }): void {
+    const room = gameManager.getRoom(payload.roomId);
+    if (!room) {
+      this.sendError(ws, 'Room no longer exists');
+      return;
+    }
+
+    const player = room.players.get(payload.playerId);
+    if (!player) {
+      this.sendError(ws, 'Player no longer in room (eliminated or removed)');
+      return;
+    }
+
+    if (!player.isAway) {
+      this.sendError(ws, 'Player is not away');
+      return;
+    }
+
+    // Mark player as returned
+    player.isAway = false;
+
+    // Set client's room/player association
+    const client = this.clients.get(ws);
+    if (client) {
+      client.roomId = payload.roomId;
+      client.playerId = payload.playerId;
+    }
+
+    // Build rejoin payload
+    const rejoinPayload: {
+      room: RoomDTO;
+      playerId: string;
+      gameState?: GameStateDTO;
+      handComplete?: HandCompletePayload;
+    } = {
+      room: this.toRoomDTO(room),
+      playerId: payload.playerId,
+    };
+
+    if (room.gameState) {
+      rejoinPayload.gameState = this.toGameStateDTO(room, payload.playerId);
+    }
+
+    this.send(ws, {
+      type: 'game-rejoined',
+      payload: rejoinPayload,
+    });
+
+    // Broadcast return status to room
+    this.broadcastToRoom(payload.roomId, {
+      type: 'player-away',
+      payload: { roomId: payload.roomId, playerId: payload.playerId, isAway: false },
+    });
+
+    console.log(`[${new Date().toISOString()}] Player ${player.name} (${player.id}) rejoined game in room ${payload.roomId}`);
   }
 
   private handleGetRooms(ws: WebSocket): void {
@@ -276,11 +428,12 @@ export class WebSocketHandler {
       return;
     }
 
-    // Get eligible players (those with chips)
+    // Get eligible players (those with chips) and eliminated players
     const eligiblePlayers = Array.from(room.players.values()).filter(p => p.chips > 0);
+    const eliminatedPlayers = Array.from(room.players.values()).filter(p => p.chips <= 0);
 
     if (eligiblePlayers.length < 2) {
-      // Game over - we have a winner!
+      // Game over - handle before removing eliminated players so standings include everyone
       if (eligiblePlayers.length === 1) {
         const winner = eligiblePlayers[0];
         winner.status = 'active'; // Mark winner as active for display
@@ -320,6 +473,54 @@ export class WebSocketHandler {
         console.log(`[${new Date().toISOString()}] No players remaining in room ${roomId}`);
       }
       return;
+    }
+
+    // Remove eliminated players from the room and send them back to the lobby
+    for (const eliminated of eliminatedPlayers) {
+      if (eliminated.isAway) {
+        // Away player eliminated — no WebSocket connection to notify, just remove
+        gameManager.removePlayerFromRoom(roomId, eliminated.id);
+
+        // Broadcast to remaining players
+        this.broadcastToRoom(roomId, {
+          type: 'player-left',
+          payload: { roomId, playerId: eliminated.id },
+        });
+
+        console.log(`[${new Date().toISOString()}] Away player ${eliminated.name} (${eliminated.id}) eliminated and removed from room ${roomId}`);
+        continue;
+      }
+
+      // Find the eliminated player's WebSocket client
+      for (const [, client] of this.clients) {
+        if (client.roomId === roomId && client.playerId === eliminated.id) {
+          // Send player-left to the eliminated player (triggers lobby redirect on their client)
+          this.send(client.ws, {
+            type: 'player-left',
+            payload: { roomId, playerId: eliminated.id },
+          });
+          // Clear their room/player association
+          client.roomId = null;
+          client.playerId = null;
+          break;
+        }
+      }
+
+      // Remove from room
+      gameManager.removePlayerFromRoom(roomId, eliminated.id);
+
+      // Broadcast to remaining players so they update their view
+      this.broadcastToRoom(roomId, {
+        type: 'player-left',
+        payload: { roomId, playerId: eliminated.id },
+      });
+
+      console.log(`[${new Date().toISOString()}] Eliminated player ${eliminated.name} (${eliminated.id}) removed from room ${roomId}`);
+    }
+
+    // Update room list for lobby
+    if (eliminatedPlayers.length > 0) {
+      this.broadcastRoomsList();
     }
 
     // Start next hand with dealer rotation
@@ -385,6 +586,7 @@ export class WebSocketHandler {
       isDealer: false,
       isSmallBlind: false,
       isBigBlind: false,
+      isAway: false,
     };
   }
 
@@ -399,6 +601,7 @@ export class WebSocketHandler {
       isDealer: player.isDealer,
       isSmallBlind: player.isSmallBlind,
       isBigBlind: player.isBigBlind,
+      isAway: player.isAway,
     };
   }
 
@@ -413,6 +616,7 @@ export class WebSocketHandler {
       isDealer: player.isDealer,
       isSmallBlind: player.isSmallBlind,
       isBigBlind: player.isBigBlind,
+      isAway: player.isAway,
       // Reveal cards only at showdown for active/all-in players
       hand: revealCards && (player.status === 'active' || player.status === 'all-in')
         ? player.hand
@@ -562,6 +766,30 @@ export class WebSocketHandler {
 
     const currentPlayerId = room.gameState.playerOrder[room.gameState.currentPlayerIndex];
     const currentPlayer = room.players.get(currentPlayerId)!;
+
+    // Auto-fold away players immediately (no timer)
+    if (currentPlayer.isAway) {
+      const result = processAction(
+        room.gameState,
+        room.players,
+        currentPlayerId,
+        'fold',
+        undefined
+      );
+
+      if (result.success) {
+        this.broadcastGameUpdate(room);
+
+        if (result.handComplete) {
+          this.handleHandComplete(room);
+        } else {
+          // Recurse to next player
+          this.sendActionRequired(room);
+        }
+      }
+      return;
+    }
+
     const validActions = getValidActions(room.gameState, currentPlayer);
 
     // Start timer and get deadline

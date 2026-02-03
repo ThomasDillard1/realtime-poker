@@ -14,6 +14,7 @@ function App() {
   const [handComplete, setHandComplete] = useState<HandCompletePayload | null>(null);
   const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);
   const [availableRooms, setAvailableRooms] = useState<RoomDTO[]>([]);
+  const [pendingRejoin, setPendingRejoin] = useState<{ roomId: string; playerId: string } | null>(null);
 
   const handleMessage = useCallback((message: ServerMessage) => {
     switch (message.type) {
@@ -93,6 +94,49 @@ function App() {
         setTurnDeadline(null);
         break;
 
+      case 'left-game':
+        setPendingRejoin({ roomId: message.payload.roomId, playerId: message.payload.playerId });
+        setRoom(null);
+        setPlayerId(null);
+        setGameState(null);
+        setGameOver(null);
+        setHandComplete(null);
+        setValidActions([]);
+        setTurnDeadline(null);
+        break;
+
+      case 'player-away':
+        setRoom((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            players: prev.players.map((p) =>
+              p.id === message.payload.playerId ? { ...p, isAway: message.payload.isAway } : p
+            ),
+          };
+        });
+        setGameState((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            players: prev.players.map((p) =>
+              p.id === message.payload.playerId ? { ...p, isAway: message.payload.isAway } : p
+            ),
+          };
+        });
+        break;
+
+      case 'game-rejoined':
+        setRoom(message.payload.room);
+        setPlayerId(message.payload.playerId);
+        setGameState(message.payload.gameState || null);
+        setHandComplete(message.payload.handComplete || null);
+        setGameOver(null);
+        setValidActions([]);
+        setTurnDeadline(null);
+        setPendingRejoin(null);
+        break;
+
       case 'error':
         setError(message.payload.message);
         break;
@@ -124,7 +168,7 @@ function App() {
           onSend={send}
         />
       ) : (
-        <Lobby onSend={send} availableRooms={availableRooms} />
+        <Lobby onSend={send} availableRooms={availableRooms} pendingRejoin={pendingRejoin} />
       )}
     </div>
   );

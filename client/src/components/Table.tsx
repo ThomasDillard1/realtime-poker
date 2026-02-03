@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { GameStateDTO, ActionType, ClientMessage, HandCompletePayload, GameOverPayload, RoomDTO } from '../types';
 import { CardDisplay } from './CardDisplay';
 
@@ -35,6 +35,30 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
   const roomName = room.name;
   const [betAmount, setBetAmount] = useState<number>(0);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  const [showLeaveText, setShowLeaveText] = useState(false);
+
+  // Track previous community card count for deal animation
+  const communityCardCount = gameState?.communityCards.length ?? 0;
+  const prevCardCountRef = useRef(communityCardCount);
+  const [animatingIndices, setAnimatingIndices] = useState<number[]>([]);
+
+  useEffect(() => {
+    const prevCount = prevCardCountRef.current;
+    prevCardCountRef.current = communityCardCount;
+
+    if (communityCardCount > prevCount) {
+      const newIndices = Array.from(
+        { length: communityCardCount - prevCount },
+        (_, i) => prevCount + i,
+      );
+      setAnimatingIndices(newIndices);
+
+      const timer = setTimeout(() => {
+        setAnimatingIndices([]);
+      }, 500); // matches animation duration
+      return () => clearTimeout(timer);
+    }
+  }, [communityCardCount]);
 
   // Apply full-screen styles when Table is mounted, restore on unmount
   useEffect(() => {
@@ -342,6 +366,41 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
 
   return (
     <div style={{ height: '100vh', overflow: 'hidden', background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 40%, #1a472a 100%)' }}>
+      {/* Leave Game Button */}
+      <button
+        onMouseEnter={() => setShowLeaveText(true)}
+        onMouseLeave={() => setShowLeaveText(false)}
+        onClick={() => onSend({ type: 'leave-game', payload: { roomId, playerId } })}
+        style={{
+          position: 'fixed',
+          top: '16px',
+          left: '16px',
+          zIndex: 200,
+          display: 'flex',
+          alignItems: 'center',
+          gap: showLeaveText ? '8px' : '0px',
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '10px',
+          padding: showLeaveText ? '8px 14px' : '8px',
+          cursor: 'pointer',
+          opacity: showLeaveText ? 1 : 0.4,
+          transition: 'all 0.2s ease',
+          fontSize: '13px',
+          fontWeight: '500',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+        }}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+          <polyline points="16 17 21 12 16 7" />
+          <line x1="21" y1="12" x2="9" y2="12" />
+        </svg>
+        {showLeaveText && <span>Leave Game</span>}
+      </button>
+
       {/* Animations */}
       <style>
         {`
@@ -374,6 +433,10 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
             20% { opacity: 1; }
             100% { transform: translateY(-30px); opacity: 0; }
           }
+          @keyframes card-deal {
+            0% { transform: translateY(-30px); opacity: 0; }
+            100% { transform: translateY(0); opacity: 1; }
+          }
         `}
       </style>
 
@@ -402,12 +465,35 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
           position: 'relative',
         }}>
           {/* Player Seats - positioned relative to poker table */}
-          {orderedGamePlayers.map((p, index) => {
-            const position = seatPositions[index] || seatPositions[0];
+          {Array.from({ length: 6 }).map((_, index) => {
+            const position = seatPositions[index];
+            const p = orderedGamePlayers[index];
+
+            // Empty seat placeholder
+            if (!p) {
+              return (
+                <div key={`empty-${index}`} style={{
+                  position: 'absolute',
+                  ...position,
+                  width: '52px',
+                  height: '52px',
+                  zIndex: 1,
+                }}>
+                  <div style={{
+                    width: '52px',
+                    height: '52px',
+                    borderRadius: '50%',
+                    backgroundColor: 'rgba(0,0,0,0.25)',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                  }} />
+                </div>
+              );
+            }
             const isCurrentTurn = p.id === gameState.currentPlayerId && !handComplete;
             const isYou = p.id === playerId;
             const isFolded = p.status === 'folded';
             const isAllIn = p.status === 'all-in';
+            const isPlayerAway = p.isAway;
             const isWinner = winnerIds.includes(p.id);
             const winAmount = winnerAmounts[p.id];
 
@@ -421,7 +507,7 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                 ...position,
                 width: `${seatWidth}px`,
                 zIndex: isWinner ? 15 : 10,
-                opacity: isFolded && !isWinner ? 0.4 : 1,
+                opacity: (isFolded || isPlayerAway) && !isWinner ? 0.4 : 1,
                 transition: 'opacity 0.3s ease',
                 textAlign: 'center',
               }}>
@@ -594,6 +680,22 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                       {p.status}
                     </div>
                   )}
+                  {isPlayerAway && (
+                    <div style={{
+                      fontSize: '10px',
+                      color: '#fff',
+                      backgroundColor: '#757575',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      marginBottom: '10px',
+                      display: 'inline-block',
+                      textTransform: 'uppercase',
+                      fontWeight: 'bold',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Away
+                    </div>
+                  )}
 
                   {/* Action Timer at Bottom */}
                   {isCurrentTurn && timeRemaining !== null && (
@@ -639,6 +741,7 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
           }}>
             {[0, 1, 2, 3, 4].map((i) => {
               const hasCard = !!gameState.communityCards[i];
+              const isNewlyDealt = hasCard && animatingIndices.includes(i);
               return (
                 <div key={i} style={{
                   width: '62px',
@@ -651,7 +754,11 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                   justifyContent: 'center',
                 }}>
                   {hasCard && (
-                    <CardDisplay card={gameState.communityCards[i]} height="86px" />
+                    <div style={isNewlyDealt ? {
+                      animation: 'card-deal 0.5s ease-out both',
+                    } : undefined}>
+                      <CardDisplay card={gameState.communityCards[i]} height="86px" />
+                    </div>
                   )}
                 </div>
               );
@@ -881,24 +988,34 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
 
                 {/* Amount input + raise button row */}
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  <input
-                    type="number"
-                    min={effectiveMinBet}
-                    max={maxBet}
-                    value={currentBetValue}
-                    onChange={(e) => setBetAmount(Number(e.target.value))}
-                    style={{
-                      width: '70px',
-                      padding: '6px',
-                      borderRadius: '4px',
-                      border: '1px solid #ddd',
-                      backgroundColor: '#fff',
-                      color: '#333',
-                      fontSize: '13px',
-                      textAlign: 'center',
-                      outline: 'none',
-                    }}
-                  />
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    backgroundColor: '#fff',
+                    borderRadius: '4px',
+                    border: '1px solid #ddd',
+                    padding: '0 6px',
+                    width: '78px',
+                  }}>
+                    <span style={{ color: '#999', fontSize: '13px', marginRight: '2px' }}>$</span>
+                    <input
+                      type="number"
+                      min={effectiveMinBet}
+                      max={maxBet}
+                      value={currentBetValue}
+                      onChange={(e) => setBetAmount(Number(e.target.value))}
+                      style={{
+                        width: '100%',
+                        padding: '6px 0',
+                        border: 'none',
+                        backgroundColor: 'transparent',
+                        color: '#333',
+                        fontSize: '13px',
+                        textAlign: 'center',
+                        outline: 'none',
+                      }}
+                    />
+                  </div>
                   <button
                     onClick={() => {
                       const amount = currentBetValue;

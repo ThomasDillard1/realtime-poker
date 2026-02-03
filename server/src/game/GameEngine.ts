@@ -106,7 +106,7 @@ export function getValidActions(gameState: GameState, player: Player): ActionTyp
     actions.push('check');
   }
 
-  if (toCall > 0 && player.chips >= toCall) {
+  if (toCall > 0 && player.chips > 0) {
     actions.push('call');
   }
 
@@ -176,6 +176,9 @@ export function processAction(
       gameState.pot += callAmount;
       gameState.roundBets.set(playerId, (gameState.roundBets.get(playerId) || 0) + callAmount);
       gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + callAmount);
+      if (player.chips === 0) {
+        player.status = 'all-in';
+      }
       break;
     }
 
@@ -207,6 +210,10 @@ export function processAction(
       const newTotal = playerBet + actualAdd;
       gameState.roundBets.set(playerId, newTotal);
       gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + actualAdd);
+
+      if (player.chips === 0) {
+        player.status = 'all-in';
+      }
 
       // Update minRaise for display purposes (the raise amount)
       gameState.minRaise = newTotal;
