@@ -76,7 +76,7 @@ function App() {
 
       case 'hand-complete':
         setHandComplete(message.payload);
-        setGameState(null); // Game state cleared after hand completes
+        // Keep gameState so the table remains visible during showdown
         setValidActions([]);
         setTurnDeadline(null);
         break;

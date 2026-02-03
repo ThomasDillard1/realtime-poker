@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { GameStateDTO, ActionType, ClientMessage, HandCompletePayload, ShowdownPlayerDTO, GameOverPayload } from '../types';
-import { CardDisplay, CardHand } from './CardDisplay';
+import { GameStateDTO, ActionType, ClientMessage, HandCompletePayload, GameOverPayload } from '../types';
+import { CardDisplay } from './CardDisplay';
 
 interface TableProps {
   gameState: GameStateDTO | null;
@@ -35,6 +35,31 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
   const [betAmount, setBetAmount] = useState<number>(0);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
 
+  // Apply full-screen styles when Table is mounted, restore on unmount
+  useEffect(() => {
+    const originalStyles = {
+      htmlOverflow: document.documentElement.style.overflow,
+      bodyOverflow: document.body.style.overflow,
+      bodyMargin: document.body.style.margin,
+      bodyPadding: document.body.style.padding,
+      bodyHeight: document.body.style.height,
+    };
+
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    document.body.style.margin = '0';
+    document.body.style.padding = '0';
+    document.body.style.height = '100vh';
+
+    return () => {
+      document.documentElement.style.overflow = originalStyles.htmlOverflow;
+      document.body.style.overflow = originalStyles.bodyOverflow;
+      document.body.style.margin = originalStyles.bodyMargin;
+      document.body.style.padding = originalStyles.bodyPadding;
+      document.body.style.height = originalStyles.bodyHeight;
+    };
+  }, []);
+
   // Update timer countdown
   useEffect(() => {
     if (!turnDeadline) {
@@ -65,19 +90,18 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
     );
   }
 
-  // If hand is complete, show the showdown screen
-  if (handComplete) {
-    return (
-      <ShowdownView
-        handComplete={handComplete}
-        playerId={playerId}
-      />
-    );
-  }
-
-  // If no game state, shouldn't happen but handle gracefully
+  // If no game state, show waiting message
   if (!gameState) {
     return <div>Waiting for game...</div>;
+  }
+
+  // Check if current player is a winner (for showdown)
+  const winnerIds = handComplete ? handComplete.winners.map(w => w.playerId) : [];
+  const winnerAmounts: Record<string, number> = {};
+  if (handComplete) {
+    handComplete.winners.forEach(w => {
+      winnerAmounts[w.playerId] = w.amount;
+    });
   }
 
   const myPlayer = gameState.players.find(p => p.id === playerId);
@@ -107,36 +131,46 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
   const effectiveMinBet = Math.min(minBet, (myPlayer?.chips || 0) + myCurrentBet);
 
   // Calculate seat positions around the table based on number of players
+  // Positions are relative to the poker table element (green felt area)
+  // Need to account for: 12px brown border + 8px visible gap = 20px total offset
+  const seatWidth = 160;
+  const borderWidth = 12; // brown border width
+  const visibleGap = 8; // visible gap between seats and table edge
+  const totalOffset = borderWidth + visibleGap; // 20px total
+
   const getSeatPositions = (numPlayers: number) => {
-    const positions: Array<{ top?: string; bottom?: string; left?: string; right?: string; transform: string }> = [];
+    const positions: Array<{
+      top?: string; bottom?: string; left?: string; right?: string;
+      transform: string;
+    }> = [];
 
     if (numPlayers === 2) {
       // Two players: top and bottom
-      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ bottom: '0', left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
     } else if (numPlayers === 3) {
-      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ bottom: '0', left: '25%', transform: 'translateX(-50%)' });
-      positions.push({ bottom: '0', right: '25%', transform: 'translateX(50%)' });
+      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '25%', transform: 'translateX(-50%)' });
+      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '75%', transform: 'translateX(-50%)' });
     } else if (numPlayers === 4) {
-      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '50%', left: '0', transform: 'translateX(-50%) translateY(-50%)' });
-      positions.push({ bottom: '0', left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '50%', right: '0', transform: 'translateX(50%) translateY(-50%)' });
+      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '50%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
+      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '50%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
     } else if (numPlayers === 5) {
-      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '30%', left: '0', transform: 'translateX(-50%) translateY(-50%)' });
-      positions.push({ bottom: '0', left: '25%', transform: 'translateX(-50%)' });
-      positions.push({ bottom: '0', right: '25%', transform: 'translateX(50%)' });
-      positions.push({ top: '30%', right: '0', transform: 'translateX(50%) translateY(-50%)' });
+      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '30%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
+      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '25%', transform: 'translateX(-50%)' });
+      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '75%', transform: 'translateX(-50%)' });
+      positions.push({ top: '30%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
     } else {
       // 6 players
-      positions.push({ top: '0', left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '30%', left: '0', transform: 'translateX(-50%) translateY(-50%)' });
-      positions.push({ bottom: '30%', left: '0', transform: 'translateX(-50%) translateY(50%)' });
-      positions.push({ bottom: '0', left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ bottom: '30%', right: '0', transform: 'translateX(50%) translateY(50%)' });
-      positions.push({ top: '30%', right: '0', transform: 'translateX(50%) translateY(-50%)' });
+      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '25%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
+      positions.push({ top: '75%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
+      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
+      positions.push({ top: '75%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
+      positions.push({ top: '25%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
     }
 
     return positions;
@@ -145,8 +179,8 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
   const seatPositions = getSeatPositions(gameState.players.length);
 
   return (
-    <div>
-      {/* Pulsing animation for active player */}
+    <div style={{ height: '100vh', overflow: 'hidden' }}>
+      {/* Animations */}
       <style>
         {`
           @keyframes pulse-glow {
@@ -157,173 +191,43 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
               box-shadow: 0 0 16px rgba(255, 193, 7, 0.6), 0 0 28px rgba(255, 193, 7, 0.3);
             }
           }
+          @keyframes winner-glow {
+            0%, 100% {
+              box-shadow: 0 0 20px rgba(76, 175, 80, 0.6), 0 0 40px rgba(76, 175, 80, 0.4), 0 0 60px rgba(76, 175, 80, 0.2);
+            }
+            50% {
+              box-shadow: 0 0 30px rgba(76, 175, 80, 0.8), 0 0 60px rgba(76, 175, 80, 0.5), 0 0 90px rgba(76, 175, 80, 0.3);
+            }
+          }
+          @keyframes confetti-fall {
+            0% { transform: translateY(-10px) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(150px) rotate(720deg); opacity: 0; }
+          }
+          @keyframes winner-bounce {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+          }
+          @keyframes chips-float {
+            0% { transform: translateY(0); opacity: 0; }
+            20% { opacity: 1; }
+            100% { transform: translateY(-30px); opacity: 0; }
+          }
         `}
       </style>
 
-      {/* Table Container with Player Seats */}
+      {/* Centering wrapper for the entire table area */}
       <div style={{
-        position: 'relative',
-        width: '100%',
-        maxWidth: '700px',
-        margin: '20px auto 20px auto',
-        padding: '90px 80px',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        width: '100vw',
+        overflow: 'visible',
+        boxSizing: 'border-box',
       }}>
-        {/* Player Seats */}
-        {gameState.players.map((p, index) => {
-          const position = seatPositions[index] || seatPositions[0];
-          const isCurrentTurn = p.id === gameState.currentPlayerId;
-          const isYou = p.id === playerId;
-          const isFolded = p.status === 'folded';
-          const isAllIn = p.status === 'all-in';
-
-          return (
-            <div key={p.id} style={{
-              position: 'absolute',
-              ...position,
-              backgroundColor: isCurrentTurn ? '#fff8e1' : '#f5f5f5',
-              border: isCurrentTurn ? '2px solid #ffc107' : '1px solid #ddd',
-              borderRadius: '10px',
-              padding: '10px 14px',
-              minWidth: '140px',
-              textAlign: 'center',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-              zIndex: 10,
-              animation: isCurrentTurn ? 'pulse-glow 2s ease-in-out infinite' : 'none',
-              opacity: isFolded ? 0.4 : 1,
-              transition: 'opacity 0.3s ease',
-            }}>
-              {/* Cards Row */}
-              <div style={{
-                display: 'flex',
-                justifyContent: 'center',
-                gap: '4px',
-                marginBottom: '8px',
-              }}>
-                {isYou && gameState.myCards && gameState.myCards.length > 0 ? (
-                  // Show face-up cards for current player
-                  gameState.myCards.map((card, i) => (
-                    <CardDisplay key={i} card={card} height="50px" />
-                  ))
-                ) : (
-                  // Show face-down cards for other players (if not folded)
-                  !isFolded && (
-                    <>
-                      <div style={{
-                        width: '36px',
-                        height: '50px',
-                        background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
-                        borderRadius: '4px',
-                        border: '1px solid #0d1442',
-                        boxShadow: 'inset 0 0 10px rgba(255,255,255,0.1)',
-                      }} />
-                      <div style={{
-                        width: '36px',
-                        height: '50px',
-                        background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
-                        borderRadius: '4px',
-                        border: '1px solid #0d1442',
-                        boxShadow: 'inset 0 0 10px rgba(255,255,255,0.1)',
-                      }} />
-                    </>
-                  )
-                )}
-              </div>
-
-              {/* Action Timer */}
-              {isCurrentTurn && timeRemaining !== null && (
-                <div style={{ marginBottom: '6px' }}>
-                  <div style={{
-                    width: '100%',
-                    height: '4px',
-                    backgroundColor: '#e0e0e0',
-                    borderRadius: '2px',
-                    overflow: 'hidden',
-                  }}>
-                    <div style={{
-                      width: `${(timeRemaining / 30) * 100}%`,
-                      height: '100%',
-                      backgroundColor: timeRemaining <= 5 ? '#f44336' : timeRemaining <= 10 ? '#ff9800' : '#4caf50',
-                      transition: 'width 0.1s linear, background-color 0.3s ease',
-                    }} />
-                  </div>
-                  <div style={{
-                    fontSize: '11px',
-                    color: timeRemaining <= 5 ? '#f44336' : '#666',
-                    marginTop: '2px',
-                    fontWeight: timeRemaining <= 5 ? 'bold' : 'normal',
-                  }}>
-                    {timeRemaining}s
-                  </div>
-                </div>
-              )}
-
-              {/* Player Name & Position Badges */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-                marginBottom: '4px',
-              }}>
-                <span style={{ fontWeight: 'bold', fontSize: '13px' }}>
-                  {p.name}
-                  {isYou && <span style={{ color: '#666', marginLeft: '4px', fontWeight: 'normal', fontSize: '11px' }}>(You)</span>}
-                </span>
-                {(p.isDealer || p.isSmallBlind || p.isBigBlind) && (
-                  <span style={{ fontSize: '10px' }}>
-                    {p.isDealer && <span style={{ backgroundColor: '#333', color: '#fff', padding: '1px 5px', borderRadius: '3px', marginRight: '2px' }}>D</span>}
-                    {p.isSmallBlind && <span style={{ backgroundColor: '#666', color: '#fff', padding: '1px 5px', borderRadius: '3px', marginRight: '2px' }}>SB</span>}
-                    {p.isBigBlind && <span style={{ backgroundColor: '#999', color: '#fff', padding: '1px 5px', borderRadius: '3px' }}>BB</span>}
-                  </span>
-                )}
-              </div>
-
-              {/* Chips & Bet Row */}
-              <div style={{
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-                gap: '8px',
-                fontSize: '12px',
-              }}>
-                <span style={{ color: '#333', fontWeight: '500' }}>${p.chips}</span>
-                {p.bet > 0 && (
-                  <span style={{
-                    color: '#e65100',
-                    fontWeight: 'bold',
-                    backgroundColor: '#fff3e0',
-                    padding: '1px 6px',
-                    borderRadius: '4px',
-                  }}>
-                    ${p.bet}
-                  </span>
-                )}
-              </div>
-
-              {/* Status Badge */}
-              {(isFolded || isAllIn) && (
-                <div style={{
-                  fontSize: '10px',
-                  color: '#fff',
-                  backgroundColor: isFolded ? '#9e9e9e' : '#7b1fa2',
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  marginTop: '4px',
-                  display: 'inline-block',
-                  textTransform: 'uppercase',
-                  fontWeight: 'bold',
-                  letterSpacing: '0.5px',
-                }}>
-                  {p.status}
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {/* Poker Table */}
+        {/* Poker Table - serves as positioning context for player seats */}
         <div style={{
-          width: '100%',
+          width: '700px',
           height: '280px',
           background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 50%, #1a472a 100%)',
           borderRadius: '150px / 100px',
@@ -335,6 +239,222 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
           justifyContent: 'center',
           position: 'relative',
         }}>
+          {/* Player Seats - positioned relative to poker table */}
+          {gameState.players.map((p, index) => {
+            const position = seatPositions[index] || seatPositions[0];
+            const isCurrentTurn = p.id === gameState.currentPlayerId && !handComplete;
+            const isYou = p.id === playerId;
+            const isFolded = p.status === 'folded';
+            const isAllIn = p.status === 'all-in';
+            const isWinner = winnerIds.includes(p.id);
+            const winAmount = winnerAmounts[p.id];
+
+            // Get showdown cards for this player (if available)
+            const showdownPlayer = handComplete?.players.find(sp => sp.id === p.id);
+            const showdownCards = handComplete?.isShowdown && isWinner && showdownPlayer?.hand;
+
+            return (
+              <div key={p.id} style={{
+                position: 'absolute',
+                ...position,
+                width: `${seatWidth}px`,
+                zIndex: isWinner ? 15 : 10,
+                opacity: isFolded && !isWinner ? 0.4 : 1,
+                transition: 'opacity 0.3s ease',
+                textAlign: 'center',
+              }}>
+                {/* Confetti for winners */}
+                {isWinner && (
+                  <div style={{ position: 'absolute', top: '-20px', left: '50%', transform: 'translateX(-50%)', pointerEvents: 'none' }}>
+                    {[...Array(12)].map((_, i) => (
+                      <div key={i} style={{
+                        position: 'absolute',
+                        width: '8px',
+                        height: '8px',
+                        backgroundColor: ['#ffd700', '#4caf50', '#ff6b6b', '#4dabf7', '#ff922b'][i % 5],
+                        borderRadius: i % 2 === 0 ? '50%' : '2px',
+                        left: `${(i - 6) * 12}px`,
+                        animation: `confetti-fall 2s ease-out ${i * 0.1}s infinite`,
+                      }} />
+                    ))}
+                  </div>
+                )}
+
+                {/* Winner amount floating */}
+                {isWinner && winAmount && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '-40px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    backgroundColor: '#4caf50',
+                    color: 'white',
+                    padding: '4px 12px',
+                    borderRadius: '12px',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    animation: 'winner-bounce 0.5s ease-in-out infinite',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                    zIndex: 20,
+                  }}>
+                    +${winAmount}
+                  </div>
+                )}
+
+                {/* Cards - floating above the info box */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  marginBottom: '-35px',
+                  position: 'relative',
+                  zIndex: 2,
+                }}>
+                  {/* Show cards: your own cards, OR showdown winner cards */}
+                  {(isYou && gameState.myCards && gameState.myCards.length > 0) ? (
+                    // Show face-up cards for current player
+                    gameState.myCards.map((card, i) => (
+                      <div key={i} style={{
+                        transform: i === 0 ? 'rotate(-4deg)' : 'rotate(4deg)',
+                        filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))',
+                      }}>
+                        <CardDisplay card={card} height="86px" />
+                      </div>
+                    ))
+                  ) : showdownCards && showdownCards.length > 0 ? (
+                    // Show face-up cards for showdown winners
+                    showdownCards.map((card, i) => (
+                      <div key={i} style={{
+                        transform: i === 0 ? 'rotate(-4deg)' : 'rotate(4deg)',
+                        filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))',
+                      }}>
+                        <CardDisplay card={card} height="86px" />
+                      </div>
+                    ))
+                  ) : (
+                    // Show face-down cards for other players (if not folded)
+                    !isFolded && (
+                      <>
+                        <div style={{
+                          width: '62px',
+                          height: '86px',
+                          background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
+                          borderRadius: '6px',
+                          border: '1px solid #0d1442',
+                          boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset 0 0 10px rgba(255,255,255,0.1)',
+                          transform: 'rotate(-4deg)',
+                        }} />
+                        <div style={{
+                          width: '62px',
+                          height: '86px',
+                          background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
+                          borderRadius: '6px',
+                          border: '1px solid #0d1442',
+                          boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset 0 0 10px rgba(255,255,255,0.1)',
+                          transform: 'rotate(4deg)',
+                        }} />
+                      </>
+                    )
+                  )}
+                </div>
+
+                {/* Player Info Box */}
+                <div style={{
+                  backgroundColor: isWinner ? '#e8f5e9' : isCurrentTurn ? '#fff8e1' : '#f5f5f5',
+                  border: isWinner ? '2px solid #4caf50' : isCurrentTurn ? '2px solid #ffc107' : '1px solid #ddd',
+                  borderRadius: '10px',
+                  boxShadow: isWinner ? '0 0 20px rgba(76, 175, 80, 0.5)' : '0 2px 8px rgba(0,0,0,0.15)',
+                  animation: isWinner ? 'winner-glow 1s ease-in-out infinite' : isCurrentTurn ? 'pulse-glow 2s ease-in-out infinite' : 'none',
+                  overflow: 'hidden',
+                  position: 'relative',
+                  zIndex: 1,
+                }}>
+                  {/* Spacer for cards overlap */}
+                  <div style={{ height: '40px' }} />
+
+                  {/* Player Name & Position Badges */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    marginBottom: '4px',
+                    padding: '0 14px',
+                  }}>
+                    <span style={{ fontWeight: 'bold', fontSize: '13px' }}>
+                      {p.name}
+                      {isYou && <span style={{ color: '#666', marginLeft: '4px', fontWeight: 'normal', fontSize: '11px' }}>(You)</span>}
+                    </span>
+                    {(p.isDealer || p.isSmallBlind || p.isBigBlind) && (
+                      <span style={{ fontSize: '10px' }}>
+                        {p.isDealer && <span style={{ backgroundColor: '#333', color: '#fff', padding: '1px 5px', borderRadius: '3px', marginRight: '2px' }}>D</span>}
+                        {p.isSmallBlind && <span style={{ backgroundColor: '#666', color: '#fff', padding: '1px 5px', borderRadius: '3px', marginRight: '2px' }}>SB</span>}
+                        {p.isBigBlind && <span style={{ backgroundColor: '#999', color: '#fff', padding: '1px 5px', borderRadius: '3px' }}>BB</span>}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Chips & Bet Row */}
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '12px',
+                    padding: '0 14px 10px 14px',
+                  }}>
+                    <span style={{ color: '#333', fontWeight: '500' }}>${p.chips}</span>
+                    {p.bet > 0 && (
+                      <span style={{
+                        color: '#e65100',
+                        fontWeight: 'bold',
+                        backgroundColor: '#fff3e0',
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                      }}>
+                        ${p.bet}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Status Badge */}
+                  {(isFolded || isAllIn) && (
+                    <div style={{
+                      fontSize: '10px',
+                      color: '#fff',
+                      backgroundColor: isFolded ? '#9e9e9e' : '#7b1fa2',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      marginBottom: '10px',
+                      display: 'inline-block',
+                      textTransform: 'uppercase',
+                      fontWeight: 'bold',
+                      letterSpacing: '0.5px',
+                    }}>
+                      {p.status}
+                    </div>
+                  )}
+
+                  {/* Action Timer at Bottom */}
+                  {isCurrentTurn && timeRemaining !== null && (
+                    <div style={{
+                      width: '100%',
+                      height: '4px',
+                      backgroundColor: '#e0e0e0',
+                    }}>
+                      <div style={{
+                        width: `${(timeRemaining / 30) * 100}%`,
+                        height: '100%',
+                        backgroundColor: timeRemaining <= 5 ? '#f44336' : timeRemaining <= 10 ? '#ff9800' : '#4caf50',
+                        transition: 'width 0.1s linear, background-color 0.3s ease',
+                      }} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
           {/* Pot Display */}
           <div style={{
             color: '#ffd700',
@@ -387,219 +507,289 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
           }}>
             {roomName}
           </div>
-        </div>
-      </div>
 
-      {isMyTurn && (
-        <div>
-          <h3>Your Turn</h3>
-          <div>
-            {validActions.includes('fold') && (
-              <button onClick={() => handleAction('fold')}>Fold</button>
-            )}
-            {validActions.includes('check') && (
-              <button onClick={() => handleAction('check')}>Check</button>
-            )}
-            {validActions.includes('call') && (
-              <button onClick={() => handleAction('call')}>
-                Call {toCall}
-              </button>
-            )}
-            {validActions.includes('all-in') && (
-              <button onClick={() => handleAction('all-in')}>
-                All In ({myPlayer?.chips})
-              </button>
-            )}
-          </div>
+          {/* Showdown Overlay */}
+          {handComplete && (
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.75)',
+              borderRadius: '150px / 100px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 20,
+            }}>
+              {(() => {
+                const { winners, isShowdown } = handComplete;
+                const isWinner = winners.some(w => w.playerId === playerId);
 
-          {(validActions.includes('bet') || validActions.includes('raise')) && (
-            <div style={{ marginTop: '10px' }}>
-              <label>
-                {validActions.includes('bet') ? 'Bet' : 'Raise to'}:{' '}
-                <input
-                  type="number"
-                  min={effectiveMinBet}
-                  max={(myPlayer?.chips || 0) + myCurrentBet}
-                  value={betAmount || effectiveMinBet}
-                  onChange={(e) => setBetAmount(Number(e.target.value))}
-                  style={{ width: '80px' }}
-                />
-              </label>
-              <button
-                onClick={() => {
-                  const amount = betAmount || effectiveMinBet;
-                  handleAction(validActions.includes('bet') ? 'bet' : 'raise', amount);
-                }}
-                disabled={betAmount > 0 && betAmount < effectiveMinBet}
-              >
-                {validActions.includes('bet') ? 'Bet' : 'Raise'}
-              </button>
-              <span style={{ marginLeft: '10px', fontSize: '12px', color: '#666' }}>
-                (min: {effectiveMinBet})
-              </span>
+                return (
+                  <>
+                    {/* Result Title */}
+                    <div style={{
+                      fontSize: '24px',
+                      fontWeight: 'bold',
+                      color: isWinner ? '#4caf50' : '#fff',
+                      marginBottom: '12px',
+                      textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+                    }}>
+                      {isWinner ? 'You Won!' : 'Hand Complete'}
+                    </div>
+
+                    {/* Winner Info */}
+                    {winners.map((winner, i) => (
+                      <div key={i} style={{
+                        color: '#ffd700',
+                        fontSize: '16px',
+                        marginBottom: '8px',
+                        textAlign: 'center',
+                      }}>
+                        <span style={{ fontWeight: 'bold' }}>
+                          {gameState.players.find(p => p.id === winner.playerId)?.name || 'Unknown'}
+                        </span>
+                        {' wins '}
+                        <span style={{ fontWeight: 'bold', color: '#4caf50' }}>
+                          ${winner.amount}
+                        </span>
+                        {isShowdown && winner.handResult?.rank && (
+                          <span style={{ color: '#fff' }}>
+                            {' with '}{formatHandRank(winner.handResult.rank)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+
+                    {/* Next Hand Indicator */}
+                    <div style={{
+                      marginTop: '16px',
+                      color: 'rgba(255,255,255,0.7)',
+                      fontSize: '14px',
+                    }}>
+                      Next hand starting soon...
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
-      )}
-    </div>
-  );
-}
+      </div>
 
-// Separate component for showdown/hand complete display
-interface ShowdownViewProps {
-  handComplete: HandCompletePayload;
-  playerId: string;
-}
-
-function ShowdownView({ handComplete, playerId }: ShowdownViewProps) {
-  const { winners, players, communityCards, pot, isShowdown } = handComplete;
-  const [countdown, setCountdown] = useState(6);
-
-  // Countdown timer
-  useEffect(() => {
-    if (countdown <= 0) return;
-
-    const timer = setTimeout(() => {
-      setCountdown(countdown - 1);
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, [countdown]);
-
-  // Get player name by ID
-  const getPlayerName = (id: string) => {
-    const player = players.find(p => p.id === id);
-    return player?.name || 'Unknown';
-  };
-
-  // Determine current player's outcome
-  const myPlayer = players.find(p => p.id === playerId);
-  const isWinner = winners.some(w => w.playerId === playerId);
-  const hasFolded = myPlayer?.status === 'folded';
-
-  // Set colors based on outcome
-  let bannerBgColor = '#ffebee';  // Red (lost)
-  let bannerBorderColor = '#f44336';
-  let bannerTextColor = '#c62828';
-  let bannerTitle = 'You Lost';
-
-  if (isWinner) {
-    bannerBgColor = '#e8f5e9';  // Green (won)
-    bannerBorderColor = '#4caf50';
-    bannerTextColor = '#2e7d32';
-    bannerTitle = 'You Won!';
-  } else if (hasFolded) {
-    bannerBgColor = '#fff8e1';  // Yellow (folded)
-    bannerBorderColor = '#ffc107';
-    bannerTextColor = '#f57f17';
-    bannerTitle = 'You Folded';
-  }
-
-  return (
-    <div>
-      <h2>Hand Complete!</h2>
-
-      {/* Personalized result banner */}
-      <div style={{
-        backgroundColor: bannerBgColor,
-        padding: '15px',
-        borderRadius: '8px',
-        margin: '10px 0',
-        border: `2px solid ${bannerBorderColor}`
-      }}>
-        <h3 style={{ margin: '0 0 10px 0', color: bannerTextColor }}>
-          {bannerTitle}
-        </h3>
-        <p>Pot: {pot}</p>
-        {winners.map((winner, i) => (
-          <div key={i} style={{ marginBottom: '12px' }}>
-            <div>
-              <strong>{getPlayerName(winner.playerId)}</strong>
-              {winner.playerId === playerId && ' (You)'}
-              {' wins '}
-              <strong>{winner.amount}</strong>
-              {' chips'}
-              {isShowdown && winner.handResult.rank && (
-                <>
-                  {' with '}
-                  <strong>{formatHandRank(winner.handResult.rank)}</strong>
-                </>
-              )}
-            </div>
-            {isShowdown && winner.handResult.cards.length > 0 && (
-              <div style={{ marginTop: '8px' }}>
-                <CardHand cards={winner.handResult.cards} height="60px" gap="4px" />
-              </div>
-            )}
+      {/* Action panel - fixed at bottom right, compact square design */}
+      {isMyTurn && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+          padding: '12px',
+          borderRadius: '10px',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          zIndex: 100,
+          width: '175px',
+        }}>
+          {/* Header */}
+          <div style={{
+            fontSize: '12px',
+            fontWeight: 'bold',
+            color: '#333',
+            textAlign: 'center',
+            marginBottom: '10px',
+            paddingBottom: '8px',
+            borderBottom: '1px solid #eee',
+          }}>
+            Your Turn
           </div>
-        ))}
-      </div>
 
-      {/* Community Cards */}
-      <div>
-        <h3>Community Cards</h3>
-        {communityCards.length > 0 ? (
-          <CardHand cards={communityCards} height="80px" />
-        ) : (
-          <p style={{ color: '#666' }}>No cards</p>
-        )}
-      </div>
+          {/* Buttons grid - all 4 always visible */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '8px',
+          }}>
+            {/* Check button */}
+            <button
+              onClick={() => validActions.includes('check') && handleAction('check')}
+              disabled={!validActions.includes('check')}
+              style={{
+                padding: '10px 8px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: '#4caf50',
+                color: 'white',
+                cursor: validActions.includes('check') ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+                fontSize: '13px',
+                opacity: validActions.includes('check') ? 1 : 0.35,
+              }}>Check</button>
 
-      {/* Player hands at showdown */}
-      {isShowdown && (
-        <div>
-          <h3>Player Hands</h3>
-          {players
-            .filter((p): p is ShowdownPlayerDTO => p.hand && p.hand.length > 0)
-            .map((p) => (
-              <div key={p.id} style={{
-                marginBottom: '15px',
-                padding: '10px',
-                backgroundColor: winners.some(w => w.playerId === p.id) ? '#e8f5e9' : '#f5f5f5',
-                borderRadius: '8px',
-                border: winners.some(w => w.playerId === p.id) ? '2px solid #4caf50' : '1px solid #ddd',
+            {/* Call button */}
+            <button
+              onClick={() => validActions.includes('call') && handleAction('call')}
+              disabled={!validActions.includes('call')}
+              style={{
+                padding: '10px 8px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: '#2196f3',
+                color: 'white',
+                cursor: validActions.includes('call') ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+                fontSize: '13px',
+                opacity: validActions.includes('call') ? 1 : 0.35,
               }}>
-                <div style={{ marginBottom: '8px' }}>
-                  <strong>{p.name}</strong>
-                  {p.id === playerId && ' (You)'}
-                  {' - '}{p.chips} chips
-                  {winners.some(w => w.playerId === p.id) && <span style={{ color: '#4caf50', marginLeft: '10px' }}>WINNER!</span>}
+              {validActions.includes('call') ? `Call $${toCall}` : 'Call'}
+            </button>
+
+            {/* Fold button */}
+            <button
+              onClick={() => validActions.includes('fold') && handleAction('fold')}
+              disabled={!validActions.includes('fold')}
+              style={{
+                padding: '10px 8px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: '#f44336',
+                color: 'white',
+                cursor: validActions.includes('fold') ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+                fontSize: '13px',
+                opacity: validActions.includes('fold') ? 1 : 0.35,
+              }}>Fold</button>
+
+            {/* All-In button */}
+            <button
+              onClick={() => validActions.includes('all-in') && handleAction('all-in')}
+              disabled={!validActions.includes('all-in')}
+              style={{
+                padding: '10px 8px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: '#9c27b0',
+                color: 'white',
+                cursor: validActions.includes('all-in') ? 'pointer' : 'not-allowed',
+                fontWeight: 'bold',
+                fontSize: '13px',
+                opacity: validActions.includes('all-in') ? 1 : 0.35,
+              }}>
+              All In
+            </button>
+          </div>
+
+          {/* Bet/Raise section */}
+          {(validActions.includes('bet') || validActions.includes('raise')) && (() => {
+            const maxBet = (myPlayer?.chips || 0) + myCurrentBet;
+            const currentBetValue = betAmount || effectiveMinBet;
+
+            return (
+              <div style={{ marginTop: '8px' }}>
+                {/* Pot-based quick buttons */}
+                <div style={{
+                  display: 'flex',
+                  gap: '4px',
+                  marginBottom: '6px',
+                }}>
+                  {[
+                    { label: '1/2', mult: 0.5 },
+                    { label: '3/4', mult: 0.75 },
+                    { label: 'Pot', mult: 1 },
+                  ].map(({ label, mult }) => {
+                    const potBet = Math.floor(gameState.pot * mult);
+                    const isDisabled = potBet < effectiveMinBet || potBet > maxBet;
+                    const actualBet = Math.min(Math.max(potBet, effectiveMinBet), maxBet);
+                    return (
+                      <button
+                        key={label}
+                        onClick={() => !isDisabled && setBetAmount(actualBet)}
+                        disabled={isDisabled}
+                        style={{
+                          flex: 1,
+                          padding: '6px 4px',
+                          borderRadius: '4px',
+                          border: '1px solid #ddd',
+                          backgroundColor: isDisabled ? '#f5f5f5' : '#f5f5f5',
+                          color: isDisabled ? '#bbb' : '#333',
+                          cursor: isDisabled ? 'not-allowed' : 'pointer',
+                          fontSize: '11px',
+                          fontWeight: '500',
+                          opacity: isDisabled ? 0.5 : 1,
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
-                <CardHand cards={p.hand} height="70px" />
+
+                {/* Bet slider */}
+                <div style={{ marginBottom: '8px' }}>
+                  <input
+                    type="range"
+                    min={effectiveMinBet}
+                    max={maxBet}
+                    value={currentBetValue}
+                    onChange={(e) => setBetAmount(Number(e.target.value))}
+                    style={{
+                      width: '100%',
+                      height: '6px',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                      accentColor: '#ff9800',
+                    }}
+                  />
+                </div>
+
+                {/* Input and raise button */}
+                <div style={{
+                  display: 'flex',
+                  gap: '6px',
+                }}>
+                  <input
+                    type="number"
+                    min={effectiveMinBet}
+                    max={maxBet}
+                    value={currentBetValue}
+                    onChange={(e) => setBetAmount(Number(e.target.value))}
+                    style={{
+                      width: '70px',
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: '1px solid #ddd',
+                      fontSize: '13px',
+                      textAlign: 'center',
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const amount = currentBetValue;
+                      handleAction(validActions.includes('bet') ? 'bet' : 'raise', amount);
+                    }}
+                    disabled={currentBetValue < effectiveMinBet}
+                    style={{
+                      flex: 1,
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: '#ff9800',
+                      color: 'white',
+                      cursor: 'pointer',
+                      fontWeight: 'bold',
+                      fontSize: '13px',
+                    }}
+                  >
+                    {validActions.includes('bet') ? 'Bet' : 'Raise'}
+                  </button>
+                </div>
               </div>
-            ))}
+            );
+          })()}
         </div>
       )}
-
-      {/* All players summary */}
-      <div>
-        <h3>Players</h3>
-        <ul>
-          {players.map((p) => (
-            <li key={p.id}>
-              {p.name} - {p.chips} chips - {p.status}
-              {p.id === playerId && ' (You)'}
-              {p.chips === 0 && ' - OUT'}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      {/* Next hand countdown */}
-      <div style={{
-        marginTop: '20px',
-        padding: '10px 20px',
-        backgroundColor: '#e3f2fd',
-        borderRadius: '4px',
-        textAlign: 'center',
-        fontSize: '16px',
-      }}>
-        {countdown > 0 ? (
-          <span>Next hand starting in <strong>{countdown}</strong>...</span>
-        ) : (
-          <span>Starting next hand...</span>
-        )}
-      </div>
     </div>
   );
 }
