@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
-import { GameStateDTO, ActionType, ClientMessage, HandCompletePayload, GameOverPayload } from '../types';
+import { GameStateDTO, ActionType, ClientMessage, HandCompletePayload, GameOverPayload, RoomDTO } from '../types';
 import { CardDisplay } from './CardDisplay';
 
 interface TableProps {
   gameState: GameStateDTO | null;
   playerId: string;
-  roomId: string;
-  roomName: string;
+  room: RoomDTO;
   validActions: ActionType[];
   turnDeadline: number | null;
   handComplete: HandCompletePayload | null;
@@ -31,7 +30,9 @@ function formatHandRank(rank: string): string {
   return formatted[rank] || rank;
 }
 
-export function Table({ gameState, playerId, roomId, roomName, validActions, turnDeadline, handComplete, gameOver, onSend }: TableProps) {
+export function Table({ gameState, playerId, room, validActions, turnDeadline, handComplete, gameOver, onSend }: TableProps) {
+  const roomId = room.id;
+  const roomName = room.name;
   const [betAmount, setBetAmount] = useState<number>(0);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
 
@@ -78,6 +79,25 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
     return () => clearInterval(interval);
   }, [turnDeadline]);
 
+  // Calculate seat positions around the table
+  // Positions are relative to the poker table element (green felt area)
+  // Need to account for: 12px brown border + 8px visible gap = 20px total offset
+  const seatWidth = 160;
+  const borderWidth = 4; // table border width
+  const visibleGap = 8; // visible gap between seats and table edge
+  const totalOffset = borderWidth + visibleGap; // 20px total
+
+  // Always use 6-player layout so seat positions are stable
+  // Index 0 = bottom center (current user), then clockwise
+  const seatPositions = [
+    { top: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' },
+    { top: '85%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' },
+    { top: '15%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' },
+    { bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' },
+    { top: '15%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' },
+    { top: '85%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' },
+  ] as Array<{ top?: string; bottom?: string; left?: string; right?: string; transform: string }>;
+
   // If game is over, show the game over screen
   if (gameOver) {
     return (
@@ -90,9 +110,193 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
     );
   }
 
-  // If no game state, show waiting message
+  // Pre-game view: show the poker table with seated players and Start/Leave buttons
   if (!gameState) {
-    return <div>Waiting for game...</div>;
+    const maxPlayers = room.maxPlayers || 6;
+    // Build seat assignments: current player at index 0, others in join order
+    const myIndex = room.players.findIndex(p => p.id === playerId);
+    const orderedPlayers = myIndex >= 0
+      ? [room.players[myIndex], ...room.players.filter((_, i) => i !== myIndex)]
+      : [...room.players];
+
+    const handleStartGame = () => {
+      onSend({ type: 'start-game', payload: { roomId } });
+    };
+    const handleLeaveRoom = () => {
+      onSend({ type: 'leave-room', payload: { roomId, playerId } });
+    };
+
+    return (
+      <div style={{ height: '100vh', overflow: 'hidden', background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 40%, #1a472a 100%)' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+          width: '100vw',
+          overflow: 'visible',
+          boxSizing: 'border-box',
+        }}>
+          {/* Poker Table */}
+          <div style={{
+            width: '700px',
+            height: '280px',
+            background: 'transparent',
+            borderRadius: '150px / 100px',
+            border: '4px solid rgba(255,255,255,0.6)',
+            boxShadow: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            position: 'relative',
+          }}>
+            {/* Seated players and empty seats */}
+            {Array.from({ length: maxPlayers }).map((_, seatIndex) => {
+              const position = seatPositions[seatIndex];
+              const player = orderedPlayers[seatIndex];
+
+              if (player) {
+                const isYou = player.id === playerId;
+                return (
+                  <div key={player.id} style={{
+                    position: 'absolute',
+                    ...position,
+                    width: `${seatWidth}px`,
+                    zIndex: 10,
+                    textAlign: 'center',
+                  }}>
+                    {/* Player Info Box */}
+                    <div style={{
+                      backgroundColor: '#f5f5f5',
+                      border: '1px solid #ddd',
+                      borderRadius: '10px',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                      overflow: 'hidden',
+                      padding: '12px 14px',
+                    }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                        marginBottom: '4px',
+                      }}>
+                        <span style={{ fontWeight: 'bold', fontSize: '13px' }}>
+                          {player.name}
+                          {isYou && <span style={{ color: '#666', marginLeft: '4px', fontWeight: 'normal', fontSize: '11px' }}>(You)</span>}
+                        </span>
+                      </div>
+                      <div style={{
+                        fontSize: '12px',
+                        color: '#333',
+                        fontWeight: '500',
+                      }}>
+                        ${player.chips}
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              // Empty seat placeholder
+              return (
+                <div key={`empty-${seatIndex}`} style={{
+                  position: 'absolute',
+                  ...position,
+                  width: `${seatWidth}px`,
+                  zIndex: 10,
+                  textAlign: 'center',
+                }}>
+                  <div style={{
+                    backgroundColor: 'rgba(200,200,200,0.15)',
+                    border: '2px dashed rgba(255,255,255,0.5)',
+                    borderRadius: '10px',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '20px 14px',
+                    }}>
+                      <span style={{ fontWeight: 'bold', fontSize: '13px', color: 'rgba(255,255,255,0.6)' }}>
+                        Open Seat
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Room name */}
+            <div style={{
+              color: 'rgba(255,255,255,0.15)',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              letterSpacing: '1px',
+              textTransform: 'uppercase',
+              position: 'absolute',
+              bottom: '20px',
+            }}>
+              {roomName}
+            </div>
+
+            {/* Players count */}
+            <div style={{
+              color: 'rgba(255,255,255,0.6)',
+              fontSize: '14px',
+              marginBottom: '16px',
+            }}>
+              {room.players.length} / {maxPlayers} players
+            </div>
+
+            {/* Start / Leave buttons */}
+            <div style={{
+              display: 'flex',
+              gap: '12px',
+              zIndex: 20,
+            }}>
+              <button
+                onClick={handleStartGame}
+                disabled={room.players.length < 2}
+                style={{
+                  padding: '10px 24px',
+                  fontSize: '14px',
+                  fontWeight: 'bold',
+                  backgroundColor: room.players.length < 2 ? '#666' : '#4caf50',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: room.players.length < 2 ? 'not-allowed' : 'pointer',
+                  opacity: room.players.length < 2 ? 0.5 : 1,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                }}
+              >
+                Start Game
+              </button>
+              <button
+                onClick={handleLeaveRoom}
+                style={{
+                  padding: '10px 24px',
+                  fontSize: '14px',
+                  fontWeight: 'bold',
+                  backgroundColor: '#f44336',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                }}
+              >
+                Leave Room
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Check if current player is a winner (for showdown)
@@ -130,73 +334,31 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
   // Set initial bet amount when it's player's turn
   const effectiveMinBet = Math.min(minBet, (myPlayer?.chips || 0) + myCurrentBet);
 
-  // Calculate seat positions around the table based on number of players
-  // Positions are relative to the poker table element (green felt area)
-  // Need to account for: 12px brown border + 8px visible gap = 20px total offset
-  const seatWidth = 160;
-  const borderWidth = 12; // brown border width
-  const visibleGap = 8; // visible gap between seats and table edge
-  const totalOffset = borderWidth + visibleGap; // 20px total
-
-  const getSeatPositions = (numPlayers: number) => {
-    const positions: Array<{
-      top?: string; bottom?: string; left?: string; right?: string;
-      transform: string;
-    }> = [];
-
-    if (numPlayers === 2) {
-      // Two players: top and bottom
-      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-    } else if (numPlayers === 3) {
-      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '25%', transform: 'translateX(-50%)' });
-      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '75%', transform: 'translateX(-50%)' });
-    } else if (numPlayers === 4) {
-      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '50%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '50%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-    } else if (numPlayers === 5) {
-      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '30%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '25%', transform: 'translateX(-50%)' });
-      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '75%', transform: 'translateX(-50%)' });
-      positions.push({ top: '30%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-    } else {
-      // 6 players
-      positions.push({ bottom: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '25%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-      positions.push({ top: '75%', right: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-      positions.push({ top: `calc(100% + ${totalOffset}px)`, left: '50%', transform: 'translateX(-50%)' });
-      positions.push({ top: '75%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-      positions.push({ top: '25%', left: `calc(100% + ${totalOffset}px)`, transform: 'translateY(-50%)' });
-    }
-
-    return positions;
-  };
-
-  const seatPositions = getSeatPositions(gameState.players.length);
+  // Reorder players: current player at seat 0 (bottom center), others in their relative order
+  const myGameIndex = gameState.players.findIndex(p => p.id === playerId);
+  const orderedGamePlayers = myGameIndex >= 0
+    ? [...gameState.players.slice(myGameIndex), ...gameState.players.slice(0, myGameIndex)]
+    : gameState.players;
 
   return (
-    <div style={{ height: '100vh', overflow: 'hidden' }}>
+    <div style={{ height: '100vh', overflow: 'hidden', background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 40%, #1a472a 100%)' }}>
       {/* Animations */}
       <style>
         {`
           @keyframes pulse-glow {
             0%, 100% {
-              box-shadow: 0 0 8px rgba(255, 193, 7, 0.4), 0 0 16px rgba(255, 193, 7, 0.2);
+              box-shadow: 0 0 6px rgba(255, 193, 7, 0.3), 0 0 12px rgba(255, 193, 7, 0.15);
             }
             50% {
-              box-shadow: 0 0 16px rgba(255, 193, 7, 0.6), 0 0 28px rgba(255, 193, 7, 0.3);
+              box-shadow: 0 0 10px rgba(255, 193, 7, 0.5), 0 0 20px rgba(255, 193, 7, 0.25);
             }
           }
           @keyframes winner-glow {
             0%, 100% {
-              box-shadow: 0 0 20px rgba(76, 175, 80, 0.6), 0 0 40px rgba(76, 175, 80, 0.4), 0 0 60px rgba(76, 175, 80, 0.2);
+              box-shadow: 0 0 6px rgba(76, 175, 80, 0.3), 0 0 12px rgba(76, 175, 80, 0.15);
             }
             50% {
-              box-shadow: 0 0 30px rgba(76, 175, 80, 0.8), 0 0 60px rgba(76, 175, 80, 0.5), 0 0 90px rgba(76, 175, 80, 0.3);
+              box-shadow: 0 0 10px rgba(76, 175, 80, 0.5), 0 0 20px rgba(76, 175, 80, 0.25);
             }
           }
           @keyframes confetti-fall {
@@ -229,10 +391,10 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
         <div style={{
           width: '700px',
           height: '280px',
-          background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 50%, #1a472a 100%)',
+          background: 'transparent',
           borderRadius: '150px / 100px',
-          border: '12px solid #5d4037',
-          boxShadow: 'inset 0 0 50px rgba(0,0,0,0.3), 0 8px 20px rgba(0,0,0,0.4)',
+          border: '4px solid rgba(255,255,255,0.6)',
+          boxShadow: 'none',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -240,7 +402,7 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
           position: 'relative',
         }}>
           {/* Player Seats - positioned relative to poker table */}
-          {gameState.players.map((p, index) => {
+          {orderedGamePlayers.map((p, index) => {
             const position = seatPositions[index] || seatPositions[0];
             const isCurrentTurn = p.id === gameState.currentPlayerId && !handComplete;
             const isYou = p.id === playerId;
@@ -332,29 +494,27 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
                       </div>
                     ))
                   ) : (
-                    // Show face-down cards for other players (if not folded)
-                    !isFolded && (
-                      <>
-                        <div style={{
-                          width: '62px',
-                          height: '86px',
-                          background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
-                          borderRadius: '6px',
-                          border: '1px solid #0d1442',
-                          boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset 0 0 10px rgba(255,255,255,0.1)',
-                          transform: 'rotate(-4deg)',
-                        }} />
-                        <div style={{
-                          width: '62px',
-                          height: '86px',
-                          background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
-                          borderRadius: '6px',
-                          border: '1px solid #0d1442',
-                          boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset 0 0 10px rgba(255,255,255,0.1)',
-                          transform: 'rotate(4deg)',
-                        }} />
-                      </>
-                    )
+                    // Show face-down cards for other players
+                    <>
+                      <div style={{
+                        width: '62px',
+                        height: '86px',
+                        background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
+                        borderRadius: '6px',
+                        border: '1px solid #0d1442',
+                        boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset 0 0 10px rgba(255,255,255,0.1)',
+                        transform: 'rotate(-4deg)',
+                      }} />
+                      <div style={{
+                        width: '62px',
+                        height: '86px',
+                        background: 'linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%)',
+                        borderRadius: '6px',
+                        border: '1px solid #0d1442',
+                        boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset 0 0 10px rgba(255,255,255,0.1)',
+                        transform: 'rotate(4deg)',
+                      }} />
+                    </>
                   )}
                 </div>
 
@@ -418,11 +578,11 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
                   </div>
 
                   {/* Status Badge */}
-                  {(isFolded || isAllIn) && (
+                  {isAllIn && (
                     <div style={{
                       fontSize: '10px',
                       color: '#fff',
-                      backgroundColor: isFolded ? '#9e9e9e' : '#7b1fa2',
+                      backgroundColor: '#7b1fa2',
                       padding: '2px 8px',
                       borderRadius: '4px',
                       marginBottom: '10px',
@@ -480,9 +640,9 @@ export function Table({ gameState, playerId, roomId, roomName, validActions, tur
                 <div key={i} style={{
                   width: '62px',
                   height: '86px',
-                  backgroundColor: hasCard ? 'transparent' : 'rgba(0,0,0,0.2)',
+                  backgroundColor: 'transparent',
                   borderRadius: '6px',
-                  border: hasCard ? 'none' : '2px dashed rgba(255,255,255,0.2)',
+                  border: hasCard ? 'none' : '2px dashed rgba(255,255,255,0.6)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',

@@ -3,12 +3,10 @@ import { ClientMessage, RoomDTO } from '../types';
 
 interface LobbyProps {
   onSend: (message: ClientMessage) => void;
-  room: RoomDTO | null;
-  playerId: string | null;
   availableRooms: RoomDTO[];
 }
 
-export function Lobby({ onSend, room, playerId, availableRooms }: LobbyProps) {
+export function Lobby({ onSend, availableRooms }: LobbyProps) {
   const [playerName, setPlayerName] = useState('');
   const [roomName, setRoomName] = useState('');
 
@@ -24,138 +22,195 @@ export function Lobby({ onSend, room, playerId, availableRooms }: LobbyProps) {
     }
   };
 
-  const handleStartGame = () => {
-    if (room) {
-      onSend({ type: 'start-game', payload: { roomId: room.id } });
-    }
-  };
+  const canInteract = !!playerName;
 
-  const handleLeaveRoom = () => {
-    if (room && playerId) {
-      onSend({ type: 'leave-room', payload: { roomId: room.id, playerId } });
-    }
-  };
-
-  // Player is in a room - show room view
-  if (room) {
-    return (
-      <div>
-        <h2>Room: {room.name}</h2>
-        <p>Room ID: {room.id}</p>
-        <p>Players ({room.players.length}/{room.maxPlayers}):</p>
-        <ul>
-          {room.players.map((p) => (
-            <li key={p.id}>
-              {p.name} - {p.chips} chips
-              {p.id === playerId && ' (You)'}
-            </li>
-          ))}
-        </ul>
-        <button onClick={handleStartGame} disabled={room.players.length < 2}>
-          Start Game
-        </button>
-        <button onClick={handleLeaveRoom}>Leave Room</button>
-      </div>
-    );
-  }
-
-  // Player is not in a room - show lobby with room list
+  // Room browser + create room form
   return (
-    <div>
-      <h2>Poker Lobby</h2>
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(145deg, #1a472a 0%, #2d5a3d 40%, #1a472a 100%)',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'flex-start',
+      paddingTop: '60px',
+      boxSizing: 'border-box',
+    }}>
+      <div style={{
+        width: '480px',
+        maxWidth: '90vw',
+      }}>
+        <h2 style={{
+          color: 'rgba(255,255,255,0.9)',
+          fontSize: '28px',
+          fontWeight: 'bold',
+          letterSpacing: '2px',
+          textTransform: 'uppercase',
+          textAlign: 'center',
+          marginBottom: '30px',
+        }}>
+          Poker Lobby
+        </h2>
 
-      {/* Player name input */}
-      <div style={{ marginBottom: '20px' }}>
-        <label>
-          Your Name:{' '}
+        {/* Player name input */}
+        <div style={{ marginBottom: '28px' }}>
+          <label style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', fontWeight: '500' }}>
+            What would you like to be called?
+          </label>
           <input
             type="text"
-            placeholder="Enter your name"
+            placeholder="Name"
             value={playerName}
-            onChange={(e) => setPlayerName(e.target.value)}
-            style={{ padding: '8px', fontSize: '14px' }}
-          />
-        </label>
-        {!playerName && (
-          <p style={{ color: '#666', fontSize: '12px', margin: '5px 0' }}>
-            Enter your name to create or join a room
-          </p>
-        )}
-      </div>
-
-      {/* Available Rooms */}
-      <div style={{ marginBottom: '20px' }}>
-        <h3>Available Rooms</h3>
-        {availableRooms.length === 0 ? (
-          <p style={{ color: '#666' }}>No rooms available. Create one below!</p>
-        ) : (
-          <ul style={{ listStyle: 'none', padding: 0 }}>
-            {availableRooms.map((r) => (
-              <li
-                key={r.id}
-                style={{
-                  padding: '12px',
-                  margin: '8px 0',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  backgroundColor: r.inProgress ? '#f5f5f5' : '#fff',
-                  cursor: r.inProgress || r.players.length >= r.maxPlayers || !playerName ? 'not-allowed' : 'pointer',
-                  opacity: r.inProgress || r.players.length >= r.maxPlayers || !playerName ? 0.6 : 1,
-                }}
-                onClick={() => {
-                  if (!r.inProgress && r.players.length < r.maxPlayers && playerName) {
-                    handleJoinRoom(r.id);
-                  }
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <strong>{r.name}</strong>
-                    <span style={{ marginLeft: '10px', color: '#666' }}>
-                      {r.players.length}/{r.maxPlayers} players
-                    </span>
-                  </div>
-                  <div>
-                    {r.inProgress ? (
-                      <span style={{ color: '#f57c00', fontWeight: 'bold' }}>In Progress</span>
-                    ) : r.players.length >= r.maxPlayers ? (
-                      <span style={{ color: '#d32f2f' }}>Full</span>
-                    ) : (
-                      <span style={{ color: '#388e3c' }}>Join</span>
-                    )}
-                  </div>
-                </div>
-                <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
-                  Blinds: {r.smallBlind}/{r.bigBlind}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Create Room */}
-      <div style={{ borderTop: '1px solid #ddd', paddingTop: '20px' }}>
-        <h3>Create New Room</h3>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <input
-            type="text"
-            placeholder="Room name"
-            value={roomName}
-            onChange={(e) => setRoomName(e.target.value)}
-            style={{ padding: '8px', fontSize: '14px' }}
-          />
-          <button
-            onClick={handleCreateRoom}
-            disabled={!playerName || !roomName}
+            maxLength={15}
+            onChange={(e) => setPlayerName(e.target.value.slice(0, 15))}
             style={{
-              padding: '8px 16px',
+              display: 'block',
+              width: '100%',
+              marginTop: '6px',
+              padding: '10px 14px',
               fontSize: '14px',
-              cursor: playerName && roomName ? 'pointer' : 'not-allowed',
+              backgroundColor: 'rgba(0,0,0,0.25)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: '6px',
+              color: '#fff',
+              outline: 'none',
+              boxSizing: 'border-box',
             }}
-          >
-            Create Room
-          </button>
+          />
+        </div>
+
+        {/* Create Room */}
+        <div style={{ marginBottom: '28px' }}>
+          <h3 style={{
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: '14px',
+            fontWeight: '600',
+            textTransform: 'uppercase',
+            letterSpacing: '1px',
+            marginBottom: '12px',
+          }}>
+            Host a Table
+          </h3>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <input
+              type="text"
+              placeholder="Room name"
+              value={roomName}
+              onChange={(e) => setRoomName(e.target.value)}
+              style={{
+                flex: 1,
+                padding: '10px 14px',
+                fontSize: '14px',
+                backgroundColor: 'rgba(0,0,0,0.25)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: '6px',
+                color: '#fff',
+                outline: 'none',
+              }}
+            />
+            <button
+              onClick={handleCreateRoom}
+              disabled={!playerName || !roomName}
+              style={{
+                padding: '10px 20px',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                backgroundColor: playerName && roomName ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)',
+                color: playerName && roomName ? '#fff' : 'rgba(255,255,255,0.3)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: '6px',
+                cursor: playerName && roomName ? 'pointer' : 'not-allowed',
+              }}
+            >
+              Host
+            </button>
+          </div>
+        </div>
+
+        {/* Available Rooms */}
+        <div style={{
+          borderTop: '1px solid rgba(255,255,255,0.15)',
+          paddingTop: '24px',
+        }}>
+          <h3 style={{
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: '14px',
+            fontWeight: '600',
+            textTransform: 'uppercase',
+            letterSpacing: '1px',
+            marginBottom: '12px',
+          }}>
+            Available Rooms
+          </h3>
+          {availableRooms.length === 0 ? (
+            <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px' }}>
+              No rooms available. Host one to get started!
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {availableRooms.map((r) => {
+                const isJoinable = !r.inProgress && r.players.length < r.maxPlayers && canInteract;
+                const buyIn = r.players.length > 0 ? r.players[0].chips : null;
+                return (
+                  <div
+                    key={r.id}
+                    onClick={() => isJoinable && handleJoinRoom(r.id)}
+                    style={{
+                      padding: '14px 16px',
+                      backgroundColor: 'rgba(0,0,0,0.2)',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: '8px',
+                      cursor: isJoinable ? 'pointer' : 'not-allowed',
+                      opacity: isJoinable ? 1 : 0.5,
+                      transition: 'background-color 0.15s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '14px' }}>{r.name}</span>
+                        <span style={{ marginLeft: '10px', color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
+                          {r.players.length}/{r.maxPlayers} players
+                        </span>
+                      </div>
+                      <div>
+                        {r.inProgress ? (
+                          <span style={{
+                            color: '#fff',
+                            fontWeight: 'bold',
+                            fontSize: '12px',
+                            backgroundColor: '#f57c00',
+                            padding: '4px 12px',
+                            borderRadius: '4px',
+                          }}>In Progress</span>
+                        ) : r.players.length >= r.maxPlayers ? (
+                          <span style={{
+                            color: '#fff',
+                            fontWeight: 'bold',
+                            fontSize: '12px',
+                            backgroundColor: '#f44336',
+                            padding: '4px 12px',
+                            borderRadius: '4px',
+                          }}>Full</span>
+                        ) : (
+                          <span style={{
+                            color: '#fff',
+                            fontWeight: 'bold',
+                            fontSize: '12px',
+                            backgroundColor: '#4caf50',
+                            padding: '4px 12px',
+                            borderRadius: '4px',
+                          }}>Join</span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '4px' }}>
+                      Blinds: {r.smallBlind}/{r.bigBlind}
+                      {buyIn != null && <span style={{ marginLeft: '10px' }}>Buy-in: ${buyIn}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

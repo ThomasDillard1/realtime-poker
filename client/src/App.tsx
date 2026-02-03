@@ -112,12 +112,11 @@ function App() {
     <div>
       {error && <p style={{ color: 'red' }}>Error: {error}</p>}
 
-      {gameState || handComplete || gameOver ? (
+      {room ? (
         <Table
           gameState={gameState}
           playerId={playerId!}
-          roomId={room?.id || ''}
-          roomName={room?.name || ''}
+          room={room}
           validActions={validActions}
           turnDeadline={turnDeadline}
           handComplete={handComplete}
@@ -125,7 +124,7 @@ function App() {
           onSend={send}
         />
       ) : (
-        <Lobby onSend={send} room={room} playerId={playerId} availableRooms={availableRooms} />
+        <Lobby onSend={send} availableRooms={availableRooms} />
       )}
     </div>
   );
