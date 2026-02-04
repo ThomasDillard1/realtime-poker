@@ -115,11 +115,17 @@ export interface ShowdownPlayerDTO extends PlayerDTO {
   hand: Card[];
 }
 
+export interface SidePotDTO {
+  amount: number;
+  eligiblePlayerIds: string[];
+}
+
 export interface HandCompletePayload {
   winners: Winner[];
   players: ShowdownPlayerDTO[];
   communityCards: Card[];
   pot: number;
+  sidePots: SidePotDTO[];
   isShowdown: boolean;
 }
 
@@ -138,10 +144,12 @@ export interface GameStateDTO {
   phase: GamePhase;
   communityCards: Card[];
   pot: number;
+  sidePots: SidePotDTO[];
   currentBet: number;
   minRaise: number;
   bigBlind: number;
   currentPlayerId: string | null;
   players: PlayerDTO[];
   myCards?: Card[];
+  revealedHands?: { playerId: string; cards: Card[] }[];
 }

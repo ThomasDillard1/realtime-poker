@@ -149,11 +149,17 @@ export interface GameOverPayload {
   players: PlayerDTO[];  // Final standings
 }
 
+export interface SidePotDTO {
+  amount: number;
+  eligiblePlayerIds: string[];
+}
+
 export interface HandCompletePayload {
   winners: Winner[];
   players: ShowdownPlayerDTO[];  // All players with revealed cards
   communityCards: Card[];
   pot: number;
+  sidePots: SidePotDTO[];
   isShowdown: boolean;  // true if cards were revealed, false if everyone folded
 }
 
@@ -198,10 +204,12 @@ export interface GameStateDTO {
   phase: GamePhase;
   communityCards: Card[];
   pot: number;
+  sidePots: SidePotDTO[];
   currentBet: number;
   minRaise: number;
   bigBlind: number;
   currentPlayerId: string | null;
   players: PlayerDTO[];
   myCards?: Card[];
+  revealedHands?: { playerId: string; cards: Card[] }[];
 }

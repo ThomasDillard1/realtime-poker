@@ -1,4 +1,4 @@
-import { Card, Suit, Rank, GameState, Player, ActionType, HandResult, HandRank, Winner, Room } from '../types/index.js';
+import { Card, Suit, Rank, GameState, Player, ActionType, HandResult, HandRank, Winner, Room, SidePotDTO } from '../types/index.js';
 
 const SUITS: Suit[] = ['hearts', 'diamonds', 'clubs', 'spades'];
 const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
@@ -130,6 +130,7 @@ export interface ActionResult {
   error?: string;
   roundComplete: boolean;
   handComplete: boolean;
+  runout?: boolean; // All-in runout: more community cards to deal with delay
 }
 
 export function processAction(
@@ -258,8 +259,11 @@ export function processAction(
   const roundComplete = isBettingRoundComplete(gameState, players);
 
   if (roundComplete) {
-    const handComplete = advancePhase(gameState, players);
-    return { success: true, roundComplete: true, handComplete };
+    const phaseResult = advancePhase(gameState, players);
+    if (phaseResult === 'runout') {
+      return { success: true, roundComplete: true, handComplete: false, runout: true };
+    }
+    return { success: true, roundComplete: true, handComplete: phaseResult };
   }
 
   // Move to next player
@@ -325,7 +329,7 @@ function canAnyoneAct(gameState: GameState, players: Map<string, Player>): boole
   return playersWhoCanAct.length >= 2;
 }
 
-function advancePhase(gameState: GameState, players: Map<string, Player>): boolean {
+function advancePhase(gameState: GameState, players: Map<string, Player>): boolean | 'runout' {
   // Reset for new betting round
   gameState.roundBets.clear();
   gameState.playersActed.clear();
@@ -378,13 +382,23 @@ function advancePhase(gameState: GameState, players: Map<string, Player>): boole
       return true;
   }
 
-  // Check if anyone can still act - if not, keep advancing to showdown
+  // Check if anyone can still act - if not, signal runout needed
   if (!canAnyoneAct(gameState, players)) {
-    // All remaining players are all-in, run out the board
-    return advancePhase(gameState, players);
+    // All remaining players are all-in - return 'runout' to let caller deal next cards with a delay
+    return 'runout';
   }
 
   return false;
+}
+
+// Advance to the next runout phase (for all-in scenarios with delayed dealing)
+// Returns: 'showdown' if hand is complete, 'runout' if more cards to deal
+export function advanceRunoutPhase(gameState: GameState, players: Map<string, Player>): 'showdown' | 'runout' {
+  const result = advancePhase(gameState, players);
+  if (result === true) return 'showdown';
+  if (result === 'runout') return 'runout';
+  // Should not happen in runout context, but handle gracefully
+  return 'showdown';
 }
 
 // Card value for comparison (2=2, ..., 10=10, J=11, Q=12, K=13, A=14)
@@ -564,71 +578,123 @@ export function evaluateHand(cards: Card[], playerId: string = ''): HandResult {
   };
 }
 
-export function determineWinners(gameState: GameState, players: Map<string, Player>): Winner[] {
-  const activePlayers = getActivePlayers(gameState, players);
-  const results: { player: Player; handResult: HandResult; contribution: number }[] = [];
+export function calculateSidePots(
+  playerContributions: Map<string, number>,
+  players: Map<string, Player>,
+): SidePotDTO[] {
+  // Collect contributions: all players who contributed (including folded)
+  const contributions: { playerId: string; amount: number; folded: boolean }[] = [];
+  for (const [playerId, amount] of playerContributions) {
+    if (amount <= 0) continue;
+    const player = players.get(playerId);
+    const folded = !player || player.status === 'folded';
+    contributions.push({ playerId, amount, folded });
+  }
 
-  // Evaluate each active player's hand and get their contribution
+  if (contributions.length === 0) return [];
+
+  // Get sorted unique contribution levels (the "layer breakpoints")
+  const levels = [...new Set(contributions.map(c => c.amount))].sort((a, b) => a - b);
+
+  const pots: SidePotDTO[] = [];
+  let previousLevel = 0;
+
+  for (const level of levels) {
+    const layerSize = level - previousLevel;
+    if (layerSize <= 0) continue;
+
+    // Count how many players contributed at least this level
+    const contributorsAtLevel = contributions.filter(c => c.amount >= level);
+    const potAmount = layerSize * contributorsAtLevel.length;
+
+    // Eligible players: non-folded who contributed at least this level
+    const eligible = contributorsAtLevel
+      .filter(c => !c.folded)
+      .map(c => c.playerId);
+
+    pots.push({ amount: potAmount, eligiblePlayerIds: eligible });
+    previousLevel = level;
+  }
+
+  // Merge consecutive pots with identical eligible players
+  const merged: SidePotDTO[] = [];
+  for (const pot of pots) {
+    const last = merged[merged.length - 1];
+    if (last && last.eligiblePlayerIds.length === pot.eligiblePlayerIds.length &&
+        last.eligiblePlayerIds.every(id => pot.eligiblePlayerIds.includes(id))) {
+      last.amount += pot.amount;
+    } else {
+      merged.push({ ...pot });
+    }
+  }
+
+  return merged;
+}
+
+export function determineWinners(gameState: GameState, players: Map<string, Player>): Winner[] {
+  const sidePots = calculateSidePots(gameState.playerContributions, players);
+
+  // Evaluate each active player's hand once and cache
+  const handCache = new Map<string, HandResult>();
+  const activePlayers = getActivePlayers(gameState, players);
   for (const player of activePlayers) {
     const allCards = [...player.hand, ...gameState.communityCards];
-    const handResult = evaluateHand(allCards, player.id);
-    const contribution = gameState.playerContributions.get(player.id) || 0;
-    results.push({ player, handResult, contribution });
+    handCache.set(player.id, evaluateHand(allCards, player.id));
   }
 
-  // Sort by score descending
-  results.sort((a, b) => b.handResult.score - a.handResult.score);
+  // Aggregate winnings per player across all pots
+  const totalWinnings = new Map<string, number>();
+  const winnerHandResults = new Map<string, HandResult>();
 
-  // Find all players with the highest score (could be a tie)
-  const highestScore = results[0].handResult.score;
-  const winnerResults = results.filter(r => r.handResult.score === highestScore);
+  for (const pot of sidePots) {
+    const eligible = pot.eligiblePlayerIds.filter(id => handCache.has(id));
 
-  // Calculate how much each winner can win
-  // Winner can only win up to their contribution from each other player
+    if (eligible.length === 0) {
+      // No eligible player (shouldn't happen) — skip
+      continue;
+    }
+
+    if (eligible.length === 1) {
+      // Single eligible player: auto-award (uncalled bet return)
+      const winnerId = eligible[0];
+      totalWinnings.set(winnerId, (totalWinnings.get(winnerId) || 0) + pot.amount);
+      winnerHandResults.set(winnerId, handCache.get(winnerId)!);
+      continue;
+    }
+
+    // Find best hand among eligible
+    let bestScore = -1;
+    for (const id of eligible) {
+      const result = handCache.get(id)!;
+      if (result.score > bestScore) bestScore = result.score;
+    }
+
+    const potWinners = eligible.filter(id => handCache.get(id)!.score === bestScore);
+
+    // Split pot among tied winners, odd chip to first
+    const share = Math.floor(pot.amount / potWinners.length);
+    const remainder = pot.amount - share * potWinners.length;
+
+    for (let i = 0; i < potWinners.length; i++) {
+      const winnerId = potWinners[i];
+      const amount = share + (i === 0 ? remainder : 0);
+      totalWinnings.set(winnerId, (totalWinnings.get(winnerId) || 0) + amount);
+      winnerHandResults.set(winnerId, handCache.get(winnerId)!);
+    }
+  }
+
+  // Build Winner[] from aggregated winnings
   const winners: Winner[] = [];
-  let totalAwarded = 0;
-
-  for (const winnerResult of winnerResults) {
-    const winnerContribution = winnerResult.contribution;
-    let winAmount = 0;
-
-    // For each player (including winner), add min(their contribution, winner's contribution) / num winners
-    for (const result of results) {
-      const theirContribution = result.contribution;
-      // Winner can only claim up to what they put in from each player
-      winAmount += Math.min(theirContribution, winnerContribution);
-    }
-
-    // If multiple winners with same hand, split the winnable amount
-    winAmount = Math.floor(winAmount / winnerResults.length);
-
+  for (const [playerId, amount] of totalWinnings) {
     winners.push({
-      playerId: winnerResult.player.id,
-      amount: winAmount,
-      handResult: winnerResult.handResult,
+      playerId,
+      amount,
+      handResult: winnerHandResults.get(playerId)!,
     });
-
-    totalAwarded += winAmount;
   }
 
-  // Return any excess to the player who over-bet (uncalled bet)
-  const excessAmount = gameState.pot - totalAwarded;
-  if (excessAmount > 0) {
-    // Find the player who contributed more than the winner
-    // In heads-up, this is the player who bet more than they could win
-    for (const result of results) {
-      const isWinner = winnerResults.some(w => w.player.id === result.player.id);
-      if (!isWinner) {
-        // Check if this player over-contributed
-        const winnerMaxContribution = Math.max(...winnerResults.map(w => w.contribution));
-        if (result.contribution > winnerMaxContribution) {
-          // Return the excess to this player
-          const playerExcess = result.contribution - winnerMaxContribution;
-          result.player.chips += playerExcess;
-        }
-      }
-    }
-  }
+  // Sort by amount descending for consistent display
+  winners.sort((a, b) => b.amount - a.amount);
 
   return winners;
 }

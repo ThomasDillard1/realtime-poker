@@ -1,7 +1,7 @@
 import { WebSocketServer as WSServer, WebSocket } from 'ws';
 import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO, GameStateDTO, Room, PlayerAction, ShowdownPlayerDTO, HandCompletePayload, ActionType } from '../types/index.js';
 import { gameManager } from '../game/GameManager.js';
-import { startGame, getValidActions, processAction, getActivePlayers, determineWinners, startNextHand } from '../game/GameEngine.js';
+import { startGame, getValidActions, processAction, getActivePlayers, determineWinners, startNextHand, advanceRunoutPhase, calculateSidePots } from '../game/GameEngine.js';
 
 interface ClientConnection {
   ws: WebSocket;
@@ -226,6 +226,8 @@ export class WebSocketHandler {
 
             this.handleHandComplete(room);
             return;
+          } else if (result.runout) {
+            this.handleRunout(room);
           } else {
             // Send action-required to next player
             this.sendActionRequired(room);
@@ -569,6 +571,9 @@ export class WebSocketHandler {
 
     if (result.handComplete) {
       this.handleHandComplete(room);
+    } else if (result.runout) {
+      // All-in runout: deal remaining community cards with delays
+      this.handleRunout(room);
     } else {
       // Send action-required to next player with timer
       this.sendActionRequired(room);
@@ -658,18 +663,28 @@ export class WebSocketHandler {
     const gameState = room.gameState!;
     const currentPlayerId = gameState.playerOrder[gameState.currentPlayerIndex];
     const player = room.players.get(forPlayerId);
+    const sidePots = calculateSidePots(gameState.playerContributions, room.players);
+
+    // Reveal all hands immediately when all remaining players are all-in
+    const remainingPlayers = getActivePlayers(gameState, room.players);
+    const allAllIn = remainingPlayers.length > 1 && remainingPlayers.every(p => p.status === 'all-in');
+    const revealedHands = allAllIn
+      ? remainingPlayers.map(p => ({ playerId: p.id, cards: p.hand }))
+      : undefined;
 
     return {
       roomId: room.id,
       phase: gameState.phase,
       communityCards: gameState.communityCards,
       pot: gameState.pot,
+      sidePots,
       currentBet: gameState.currentBet,
       minRaise: gameState.minRaise,
       bigBlind: gameState.bigBlind,
       currentPlayerId,
       players: Array.from(room.players.values()).map((p) => this.toPlayerDTO(p)),
       myCards: player?.hand,
+      revealedHands,
     };
   }
 
@@ -755,6 +770,8 @@ export class WebSocketHandler {
 
     if (result.handComplete) {
       this.handleHandComplete(room);
+    } else if (result.runout) {
+      this.handleRunout(room);
     } else {
       // Send action-required to next player
       this.sendActionRequired(room);
@@ -782,6 +799,8 @@ export class WebSocketHandler {
 
         if (result.handComplete) {
           this.handleHandComplete(room);
+        } else if (result.runout) {
+          this.handleRunout(room);
         } else {
           // Recurse to next player
           this.sendActionRequired(room);
@@ -801,6 +820,29 @@ export class WebSocketHandler {
     });
   }
 
+  private handleRunout(room: Room): void {
+    if (!room.gameState) return;
+
+    const RUNOUT_DELAY_MS = 1500;
+
+    setTimeout(() => {
+      if (!room.gameState) return;
+
+      const result = advanceRunoutPhase(room.gameState, room.players);
+      this.broadcastGameUpdate(room);
+
+      if (result === 'showdown') {
+        // Small extra delay before resolving the hand so players can see the final card
+        setTimeout(() => {
+          this.handleHandComplete(room);
+        }, RUNOUT_DELAY_MS);
+      } else {
+        // More cards to deal - continue runout
+        this.handleRunout(room);
+      }
+    }, RUNOUT_DELAY_MS);
+  }
+
   private handleHandComplete(room: Room): void {
     if (!room.gameState) return;
 
@@ -810,6 +852,7 @@ export class WebSocketHandler {
     const activePlayers = getActivePlayers(room.gameState, room.players);
     const isShowdown = activePlayers.length > 1;
     let winners;
+    let sidePots = calculateSidePots(room.gameState.playerContributions, room.players);
 
     if (!isShowdown) {
       const winner = activePlayers[0];
@@ -830,11 +873,70 @@ export class WebSocketHandler {
       }
     }
 
+    // Determine which players reveal their cards at showdown.
+    const revealPlayerIds = new Set<string>();
+    if (isShowdown) {
+      // Reveal all hands when side pots exist or when all remaining
+      // players are all-in (no further betting was possible).
+      const hasSidePots = sidePots.length > 1;
+      const allPlayersAllIn = activePlayers.every(p => p.status === 'all-in');
+
+      if (hasSidePots || allPlayersAllIn) {
+        for (const p of activePlayers) {
+          revealPlayerIds.add(p.id);
+        }
+      } else {
+        // Original reveal logic for simple pots
+        const winnerIdSet = new Set(winners.map(w => w.playerId));
+        const { dealerIndex, playerOrder, lastRaiser } = room.gameState;
+        const numPlayers = playerOrder.length;
+
+        let startOffset: number;
+        if (lastRaiser) {
+          const raiserIdx = playerOrder.indexOf(lastRaiser);
+          startOffset = raiserIdx >= 0 ? raiserIdx : dealerIndex + 1;
+        } else {
+          startOffset = dealerIndex + 1;
+        }
+
+        const showdownOrder: string[] = [];
+        for (let i = 0; i < numPlayers; i++) {
+          const idx = (startOffset + i) % numPlayers;
+          const pid = playerOrder[idx];
+          const p = room.players.get(pid);
+          if (p && (p.status === 'active' || p.status === 'all-in')) {
+            showdownOrder.push(pid);
+          }
+        }
+
+        let lastWinnerIdx = -1;
+        for (let i = showdownOrder.length - 1; i >= 0; i--) {
+          if (winnerIdSet.has(showdownOrder[i])) {
+            lastWinnerIdx = i;
+            break;
+          }
+        }
+
+        if (lastWinnerIdx >= 0) {
+          for (let i = 0; i <= lastWinnerIdx; i++) {
+            revealPlayerIds.add(showdownOrder[i]);
+          }
+        } else {
+          for (const pid of showdownOrder) {
+            revealPlayerIds.add(pid);
+          }
+        }
+      }
+    }
+
     const handCompletePayload: HandCompletePayload = {
       winners,
-      players: Array.from(room.players.values()).map((p) => this.toShowdownPlayerDTO(p, isShowdown)),
+      players: Array.from(room.players.values()).map((p) =>
+        this.toShowdownPlayerDTO(p, isShowdown && revealPlayerIds.has(p.id))
+      ),
       communityCards: room.gameState.communityCards,
       pot: room.gameState.pot,
+      sidePots,
       isShowdown,
     };
 

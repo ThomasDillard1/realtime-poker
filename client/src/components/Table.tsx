@@ -497,9 +497,12 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
             const isWinner = winnerIds.includes(p.id);
             const winAmount = winnerAmounts[p.id];
 
-            // Get showdown cards for this player (if available)
+            // Get showdown cards for this player (if server revealed them)
             const showdownPlayer = handComplete?.players.find(sp => sp.id === p.id);
-            const showdownCards = handComplete?.isShowdown && isWinner && showdownPlayer?.hand;
+            const showdownCards = handComplete?.isShowdown && showdownPlayer?.hand && showdownPlayer.hand.length > 0 && showdownPlayer.hand;
+
+            // Cards revealed during all-in runout (before showdown)
+            const revealedCards = gameState.revealedHands?.find(rh => rh.playerId === p.id)?.cards;
 
             return (
               <div key={p.id} style={{
@@ -558,7 +561,7 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                   position: 'relative',
                   zIndex: 2,
                 }}>
-                  {/* Show cards: your own cards, OR showdown winner cards */}
+                  {/* Show cards: your own, all-in revealed, showdown revealed, or face-down */}
                   {(isYou && gameState.myCards && gameState.myCards.length > 0) ? (
                     // Show face-up cards for current player
                     gameState.myCards.map((card, i) => (
@@ -569,8 +572,18 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                         <CardDisplay card={card} height="86px" />
                       </div>
                     ))
+                  ) : revealedCards && revealedCards.length > 0 ? (
+                    // Show face-up cards during all-in runout
+                    revealedCards.map((card, i) => (
+                      <div key={i} style={{
+                        transform: i === 0 ? 'rotate(-4deg)' : 'rotate(4deg)',
+                        filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))',
+                      }}>
+                        <CardDisplay card={card} height="86px" />
+                      </div>
+                    ))
                   ) : showdownCards && showdownCards.length > 0 ? (
-                    // Show face-up cards for showdown winners
+                    // Show face-up cards for showdown reveals
                     showdownCards.map((card, i) => (
                       <div key={i} style={{
                         transform: i === 0 ? 'rotate(-4deg)' : 'rotate(4deg)',
@@ -719,16 +732,52 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
 
           {/* Pot Display */}
           <div style={{
-            backgroundColor: 'rgba(0,0,0,0.4)',
-            borderRadius: '20px',
-            padding: '8px 28px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '4px',
             marginBottom: '15px',
-            color: '#fff',
-            fontSize: '16px',
-            fontWeight: 'bold',
-            letterSpacing: '0.5px',
           }}>
-            Pot: ${gameState.pot}
+            <div style={{
+              backgroundColor: 'rgba(0,0,0,0.4)',
+              borderRadius: '20px',
+              padding: '8px 28px',
+              color: '#fff',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              letterSpacing: '0.5px',
+            }}>
+              Total Pot: ${gameState.pot}
+            </div>
+            {(() => {
+              // Only show breakdown when someone is all-in and there are
+              // multiple pots each contested by 2+ players (single-eligible
+              // pots are just uncalled bet returns, not real side pots).
+              const realPots = gameState.sidePots?.filter(sp => sp.eligiblePlayerIds.length >= 2) ?? [];
+              const hasAllIn = gameState.players.some(p => p.status === 'all-in');
+              if (realPots.length <= 1 || !hasAllIn) return null;
+              return (
+                <div style={{
+                  display: 'flex',
+                  gap: '6px',
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                }}>
+                  {realPots.map((sp, i) => (
+                    <div key={i} style={{
+                      backgroundColor: 'rgba(0,0,0,0.3)',
+                      borderRadius: '12px',
+                      padding: '3px 10px',
+                      color: 'rgba(255,255,255,0.8)',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                    }}>
+                      {i === 0 ? 'Main' : `Side ${i}`}: ${sp.amount}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Community Cards */}
