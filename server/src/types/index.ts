@@ -43,6 +43,8 @@ export interface Room {
   bigBlind: number;
   gameState: GameState | null;
   createdAt: number;
+  /** Players eliminated during the current game, in order of elimination (first out = index 0) */
+  eliminatedPlayers: PlayerDTO[];
 }
 
 // ============================================

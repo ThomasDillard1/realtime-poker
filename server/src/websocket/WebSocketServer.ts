@@ -360,7 +360,8 @@ export class WebSocketHandler {
       return;
     }
 
-    // Initialize game state
+    // Initialize game state and reset elimination tracking
+    room.eliminatedPlayers = [];
     room.gameState = startGame(room);
 
     // Send personalized game state to each player
@@ -447,17 +448,24 @@ export class WebSocketHandler {
           }
         }
 
-        // Sort players by chips for final standings
-        const allPlayers = Array.from(room.players.values())
-          .sort((a, b) => b.chips - a.chips);
+        // Build final standings: winner first, then last eliminated (still in room),
+        // then previously eliminated in reverse order (last out = 2nd place, first out = last place)
+        const currentPlayers = Array.from(room.players.values())
+          .filter(p => p.id !== winner.id)
+          .map(p => this.toPlayerDTO(p));
+        const previouslyEliminated = [...room.eliminatedPlayers].reverse().map(p => ({ ...p, status: 'out' as const }));
+        const allPlayers = [this.toPlayerDTO(winner), ...currentPlayers, ...previouslyEliminated];
 
         this.broadcastToRoom(roomId, {
           type: 'game-over',
           payload: {
             winner: this.toPlayerDTO(winner),
-            players: allPlayers.map(p => this.toPlayerDTO(p)),
+            players: allPlayers,
           },
         });
+
+        // Clear elimination tracking
+        room.eliminatedPlayers = [];
 
         // Clear game state
         room.gameState = null;
@@ -479,6 +487,8 @@ export class WebSocketHandler {
 
     // Remove eliminated players from the room and send them back to the lobby
     for (const eliminated of eliminatedPlayers) {
+      // Record elimination for final standings before removing
+      room.eliminatedPlayers.push(this.toPlayerDTO(eliminated));
       if (eliminated.isAway) {
         // Away player eliminated — no WebSocket connection to notify, just remove
         gameManager.removePlayerFromRoom(roomId, eliminated.id);

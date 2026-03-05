@@ -14,6 +14,7 @@ class GameManager {
       bigBlind,
       gameState: null,
       createdAt: Date.now(),
+      eliminatedPlayers: [],
     };
     this.rooms.set(id, room);
     return room;
