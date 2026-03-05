@@ -61,8 +61,24 @@ After each hand concludes, a results screen shows the winner and updated chip co
 ---
 
 ## Visuals
+No rooms available.
+<img width="1552" height="939" alt="Screenshot 2026-03-04 at 9 24 44 PM" src="https://github.com/user-attachments/assets/52589221-3e7e-4871-baa2-13ab07952db6" />
 
-*Screenshots coming soon.*
+A room is available to join.
+<img width="776" height="470" alt="Screenshot 2026-03-04 at 9 25 33 PM" src="https://github.com/user-attachments/assets/dacc4403-faef-4964-8077-ac8d3519d5ee" />
+
+You joined a room.
+<img width="1552" height="939" alt="Screenshot 2026-03-04 at 9 26 50 PM" src="https://github.com/user-attachments/assets/eb25178b-dc28-4f15-9a19-74ad83244502" />
+
+Room has started.
+<img width="1552" height="939" alt="Screenshot 2026-03-04 at 9 28 37 PM" src="https://github.com/user-attachments/assets/c24b84bf-0de6-4402-ae66-2296e55c39f6" />
+
+Players have been eliminated.
+<img width="776" height="470" alt="Screenshot 2026-03-04 at 9 30 26 PM" src="https://github.com/user-attachments/assets/e3e4d5e2-bec6-44bb-a858-c74b2e6b8bb1" />
+
+Final standings.
+
+
 
 ---
 
