@@ -120,12 +120,24 @@ export interface SidePotDTO {
   eligiblePlayerIds: string[];
 }
 
+export interface PotResultDTO {
+  amount: number;
+  eligiblePlayerIds: string[];
+  winnerIds: string[];
+}
+
+export interface RefundDTO {
+  playerId: string;
+  amount: number;
+}
+
 export interface HandCompletePayload {
   winners: Winner[];
   players: ShowdownPlayerDTO[];
   communityCards: Card[];
-  pot: number;
-  sidePots: SidePotDTO[];
+  pot: number;                   // Contested pot, after uncalled chips are returned
+  potResults: PotResultDTO[];    // Main pot first, then side pots, each with its winner(s)
+  refunds: RefundDTO[];          // Uncalled chips returned to the player who bet them
   isShowdown: boolean;
 }
 
@@ -143,13 +155,15 @@ export interface GameStateDTO {
   roomId: string;
   phase: GamePhase;
   communityCards: Card[];
-  pot: number;
-  sidePots: SidePotDTO[];
+  pot: number;                   // Every chip committed this hand, including current-street bets
+  settledPot: number;            // Chips from completed streets; current-street bets sit in front of players
+  sidePots: SidePotDTO[];        // Layered from settled chips, so it stays stable during a street
   currentBet: number;
   minRaise: number;
   bigBlind: number;
   currentPlayerId: string | null;
   players: PlayerDTO[];
+  myMaxBet: number;              // Most this client can usefully bet (effective stack), 0 if not acting
   myCards?: Card[];
   revealedHands?: { playerId: string; cards: Card[] }[];
 }

@@ -2,7 +2,11 @@
 
 ## Project Overview
 
-Realtime Poker is a server-authoritative multiplayer Texas Hold'em application. All game logic runs on the server — clients only send actions and render state — which prevents cheating and keeps every player's view consistent in real time. The game supports up to 6 players per room, full betting rounds (pre-flop through river), showdown hand evaluation, a leaderboard, and animated card dealing.
+Realtime Poker is a server-authoritative multiplayer Texas Hold'em application. All game logic runs on the server — clients only send actions and render state — which prevents cheating and keeps every player's view consistent in real time. The game supports up to 6 players per room, full betting rounds (pre-flop through river), all-ins with correct main pot and side pot splitting, showdown hand evaluation, a leaderboard, and animated card dealing.
+
+**Documentation**
+- [Architecture](docs/architecture.md) — how the client, server, and game engine fit together
+- [How side pots work](docs/side-pots.md) — the intuition behind the pot-splitting logic
 
 ### Tech Stack
 
@@ -23,9 +27,25 @@ Realtime Poker is a server-authoritative multiplayer Texas Hold'em application. 
 
 The app is live at: https://realtime-poker-teal.vercel.app/
 
-### 1. Create a Character
+### Run it locally
 
-On the landing page, enter a display name and any other character details to identify yourself at the table. This creates your player profile for the session.
+```bash
+npm run install:all   # install server and client dependencies
+npm run dev:server    # WebSocket server on :8080
+npm run dev:client    # Vite dev server, in a second terminal
+```
+
+Tests and typechecking live in `server/`:
+
+```bash
+cd server
+npm test          # poker rules: side pots, all-ins, chip conservation
+npm run typecheck
+```
+
+### 1. Pick a Name
+
+On the lobby page, enter the display name you want to be known by at the table.
 
 ### 2. Create or Join a Room
 
@@ -52,7 +72,11 @@ Players take turns acting in order. On your turn you will be prompted with the a
 | Raise | When there is an existing bet |
 | All-In | Any time |
 
+A raise must be at least as large as the previous raise, and you can always move all-in for less if that is your whole stack.
+
 The hand progresses through the flop (3 community cards), turn (1 card), and river (1 card), with a betting round after each. At showdown, the best 5-card hand wins the pot.
+
+When players are all-in for different amounts, the pot splits into a main pot and side pots: you can only win the chips you covered. Any chips nobody matched are handed straight back. If everyone left in the hand is all-in, the remaining community cards are dealt out automatically. See [How side pots work](docs/side-pots.md).
 
 ### 5. Leaderboard and Next Hand
 

@@ -336,10 +336,11 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
   const myCurrentBet = myPlayer?.bet || 0;
   const toCall = gameState.currentBet - myCurrentBet;
 
-  // Calculate minimum bet/raise (minimum raise is double the current bet)
+  // The server owns the raise rule (current bet + last full raise), so use the
+  // minRaise it sends rather than recomputing it here.
   const minBet = gameState.currentBet === 0
     ? gameState.bigBlind
-    : gameState.currentBet * 2;
+    : gameState.minRaise;
 
   const handleAction = (action: ActionType, amount?: number) => {
     onSend({
@@ -356,7 +357,12 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
   const isMyTurn = gameState.currentPlayerId === playerId;
 
   // Set initial bet amount when it's player's turn
-  const effectiveMinBet = Math.min(minBet, (myPlayer?.chips || 0) + myCurrentBet);
+  const effectiveMinBet = Math.min(
+    minBet,
+    gameState.myMaxBet > 0
+      ? Math.min((myPlayer?.chips || 0) + myCurrentBet, gameState.myMaxBet)
+      : (myPlayer?.chips || 0) + myCurrentBet,
+  );
 
   // Reorder players: current player at seat 0 (bottom center), others in their relative order
   const myGameIndex = gameState.players.findIndex(p => p.id === playerId);
@@ -747,15 +753,32 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
               fontWeight: 'bold',
               letterSpacing: '0.5px',
             }}>
-              Total Pot: ${gameState.pot}
+              Pot: ${gameState.settledPot}
             </div>
+
+            {/* Chips still in front of players this street, not yet collected */}
+            {gameState.pot > gameState.settledPot && (
+              <div style={{
+                color: 'rgba(255,255,255,0.55)',
+                fontSize: '11px',
+                fontWeight: '600',
+                letterSpacing: '0.3px',
+              }}>
+                ${gameState.pot - gameState.settledPot} in play
+              </div>
+            )}
+
             {(() => {
-              // Only show breakdown when someone is all-in and there are
-              // multiple pots each contested by 2+ players (single-eligible
-              // pots are just uncalled bet returns, not real side pots).
-              const realPots = gameState.sidePots?.filter(sp => sp.eligiblePlayerIds.length >= 2) ?? [];
-              const hasAllIn = gameState.players.some(p => p.status === 'all-in');
-              if (realPots.length <= 1 || !hasAllIn) return null;
+              // The breakdown only means something once the pot has actually
+              // split. Pots are layered from settled chips, so more than one
+              // pot means a live player is capped below the others.
+              const pots = gameState.sidePots ?? [];
+              if (pots.length <= 1) return null;
+
+              // Only dim on eligibility for someone actually contesting the pot;
+              // observers and busted players would otherwise see it all greyed.
+              const inHand = myPlayer?.status === 'active' || myPlayer?.status === 'all-in';
+
               return (
                 <div style={{
                   display: 'flex',
@@ -763,18 +786,30 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                   flexWrap: 'wrap',
                   justifyContent: 'center',
                 }}>
-                  {realPots.map((sp, i) => (
-                    <div key={i} style={{
-                      backgroundColor: 'rgba(0,0,0,0.3)',
-                      borderRadius: '12px',
-                      padding: '3px 10px',
-                      color: 'rgba(255,255,255,0.8)',
-                      fontSize: '11px',
-                      fontWeight: '600',
-                    }}>
-                      {i === 0 ? 'Main' : `Side ${i}`}: ${sp.amount}
-                    </div>
-                  ))}
+                  {pots.map((sp, i) => {
+                    const eligibleNames = sp.eligiblePlayerIds
+                      .map(id => gameState.players.find(p => p.id === id)?.name || 'Unknown')
+                      .join(', ');
+                    const canWin = !inHand || sp.eligiblePlayerIds.includes(playerId);
+                    return (
+                      <div
+                        key={i}
+                        title={`Contested by ${eligibleNames}`}
+                        style={{
+                          backgroundColor: 'rgba(0,0,0,0.3)',
+                          borderRadius: '12px',
+                          padding: '3px 10px',
+                          color: 'rgba(255,255,255,0.8)',
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          opacity: canWin ? 1 : 0.4,
+                          transition: 'opacity 0.2s ease',
+                        }}
+                      >
+                        {i === 0 ? 'Main' : `Side ${i}`}: ${sp.amount}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })()}
@@ -843,7 +878,14 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
               zIndex: 20,
             }}>
               {(() => {
-                const { winners, isShowdown } = handComplete;
+                const { winners, isShowdown, refunds, potResults } = handComplete;
+                const nameOf = (id: string) =>
+                  gameState.players.find(p => p.id === id)?.name || 'Unknown';
+                const rankOf = (id: string) =>
+                  winners.find(w => w.playerId === id)?.handResult?.rank;
+                // With a single pot the aggregate line says everything; break the
+                // results out per pot only once the pot has actually split.
+                const perPot = (potResults?.length ?? 0) > 1;
                 const isWinner = winners.some(w => w.playerId === playerId);
 
                 return (
@@ -866,25 +908,65 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
                       {isWinner ? 'You Won!' : 'Hand Complete'}
                     </div>
 
-                    {/* Winner Info */}
-                    {winners.map((winner, i) => (
-                      <div key={i} style={{
-                        color: 'rgba(255,255,255,0.85)',
-                        fontSize: '14px',
-                        marginBottom: '6px',
+                    {/* Winner Info — per pot once the pot has split */}
+                    {perPot
+                      ? potResults.map((pot, i) => (
+                          <div key={`pot-${i}`} style={{
+                            color: 'rgba(255,255,255,0.85)',
+                            fontSize: '14px',
+                            marginBottom: '6px',
+                          }}>
+                            <span style={{ color: 'rgba(255,255,255,0.6)' }}>
+                              {i === 0 ? 'Main pot' : `Side pot ${i}`}
+                            </span>
+                            {' '}
+                            <span style={{ fontWeight: 'bold', color: '#a5d6a7' }}>
+                              ${pot.amount}
+                            </span>
+                            {' — '}
+                            <span style={{ fontWeight: 'bold', color: '#fff' }}>
+                              {pot.winnerIds.map(nameOf).join(' & ')}
+                            </span>
+                            {isShowdown && pot.winnerIds.length === 1 && rankOf(pot.winnerIds[0]) && (
+                              <span>
+                                {' ('}{formatHandRank(rankOf(pot.winnerIds[0])!)}{')'}
+                              </span>
+                            )}
+                          </div>
+                        ))
+                      : winners.map((winner, i) => (
+                          <div key={i} style={{
+                            color: 'rgba(255,255,255,0.85)',
+                            fontSize: '14px',
+                            marginBottom: '6px',
+                          }}>
+                            <span style={{ fontWeight: 'bold', color: '#fff' }}>
+                              {nameOf(winner.playerId)}
+                            </span>
+                            {' wins '}
+                            <span style={{ fontWeight: 'bold', color: '#a5d6a7' }}>
+                              ${winner.amount}
+                            </span>
+                            {isShowdown && winner.handResult?.rank && (
+                              <span>
+                                {' with '}{formatHandRank(winner.handResult.rank)}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+
+                    {/* Uncalled chips handed back — never matched by anyone */}
+                    {refunds?.map((refund, i) => (
+                      <div key={`refund-${i}`} style={{
+                        color: 'rgba(255,255,255,0.6)',
+                        fontSize: '12px',
+                        marginTop: '4px',
                       }}>
-                        <span style={{ fontWeight: 'bold', color: '#fff' }}>
-                          {gameState.players.find(p => p.id === winner.playerId)?.name || 'Unknown'}
-                        </span>
-                        {' wins '}
-                        <span style={{ fontWeight: 'bold', color: '#a5d6a7' }}>
-                          ${winner.amount}
-                        </span>
-                        {isShowdown && winner.handResult?.rank && (
-                          <span>
-                            {' with '}{formatHandRank(winner.handResult.rank)}
-                          </span>
-                        )}
+                        {'Returned '}
+                        <span style={{ fontWeight: 'bold' }}>${refund.amount}</span>
+                        {' to '}
+                        {gameState.players.find(p => p.id === refund.playerId)?.name || 'Unknown'}
+                        {' (uncalled)'}
                       </div>
                     ))}
 
@@ -984,7 +1066,13 @@ export function Table({ gameState, playerId, room, validActions, turnDeadline, h
 
           {/* Bet/Raise section */}
           {(validActions.includes('bet') || validActions.includes('raise')) && (() => {
-            const maxBet = (myPlayer?.chips || 0) + myCurrentBet;
+            // Chips beyond the deepest opponent's reach can't be called, so the
+            // server trims them. Cap the slider there rather than offering an
+            // amount that would be silently reduced.
+            const stackMax = (myPlayer?.chips || 0) + myCurrentBet;
+            const maxBet = gameState.myMaxBet > 0
+              ? Math.min(stackMax, gameState.myMaxBet)
+              : stackMax;
             const currentBetValue = betAmount || effectiveMinBet;
 
             return (

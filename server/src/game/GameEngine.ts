@@ -1,4 +1,5 @@
-import { Card, Suit, Rank, GameState, Player, ActionType, HandResult, HandRank, Winner, Room, SidePotDTO } from '../types/index.js';
+import { Card, Suit, Rank, GameState, Player, ActionType, HandResult, HandRank, Winner, Room, SidePotDTO, RefundDTO, PotResultDTO } from '../types/index.js';
+import { buildPots, awardPots, Contribution } from './pots.js';
 
 const SUITS: Suit[] = ['hearts', 'diamonds', 'clubs', 'spades'];
 const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
@@ -24,6 +25,26 @@ export function shuffleDeck(deck: Card[]): Card[] {
 
 export function dealCards(deck: Card[], count: number): Card[] {
   return deck.splice(0, count);
+}
+
+/**
+ * Post a blind (or any forced bet) for a player.
+ *
+ * A player whose stack cannot cover the blind posts what they have and is
+ * immediately all-in — they must stay eligible for the part of the pot they
+ * paid for rather than being left 'active' with no chips, which would leave
+ * them able to do nothing but fold.
+ */
+function postBlind(gameState: GameState, player: Player, amount: number): void {
+  const posted = Math.min(player.chips, amount);
+  player.chips -= posted;
+  player.bet = posted;
+  gameState.roundBets.set(player.id, posted);
+  gameState.playerContributions.set(player.id, posted);
+  gameState.pot += posted;
+  if (player.chips === 0) {
+    player.status = 'all-in';
+  }
 }
 
 export function startGame(room: Room): GameState {
@@ -59,7 +80,9 @@ export function startGame(room: Room): GameState {
     communityCards: [],
     pot: 0,
     currentBet: room.bigBlind,
-    minRaise: room.bigBlind, // Minimum raise is always at least the big blind
+    // A raise must reach at least one big blind above the current bet.
+    minRaise: room.bigBlind * 2,
+    lastRaiseSize: room.bigBlind,
     bigBlind: room.bigBlind,
     currentPlayerIndex: firstToActIndex,
     dealerIndex,
@@ -72,27 +95,48 @@ export function startGame(room: Room): GameState {
   };
 
   // Post blinds
-  const sbPlayer = players.get(playerOrder[smallBlindIndex])!;
-  const bbPlayer = players.get(playerOrder[bigBlindIndex])!;
-
-  const sbAmount = Math.min(sbPlayer.chips, room.smallBlind);
-  sbPlayer.chips -= sbAmount;
-  sbPlayer.bet = sbAmount;
-  gameState.roundBets.set(sbPlayer.id, sbAmount);
-  gameState.playerContributions.set(sbPlayer.id, sbAmount);
-  gameState.pot += sbAmount;
-
-  const bbAmount = Math.min(bbPlayer.chips, room.bigBlind);
-  bbPlayer.chips -= bbAmount;
-  bbPlayer.bet = bbAmount;
-  gameState.roundBets.set(bbPlayer.id, bbAmount);
-  gameState.playerContributions.set(bbPlayer.id, bbAmount);
-  gameState.pot += bbAmount;
+  postBlind(gameState, players.get(playerOrder[smallBlindIndex])!, room.smallBlind);
+  postBlind(gameState, players.get(playerOrder[bigBlindIndex])!, room.bigBlind);
 
   return gameState;
 }
 
-export function getValidActions(gameState: GameState, player: Player): ActionType[] {
+/**
+ * The most a player can usefully have bet on this street — the "effective stack".
+ *
+ * No opponent can call more than they own, so chips beyond the deepest remaining
+ * opponent's reach could never be matched. Rather than take them and hand them
+ * back as a refund at the end, they simply never leave the player's stack: going
+ * all-in against a shorter stack is a call, not a shove.
+ *
+ * Blinds are exempt — they are forced bets, posted in full and refunded if
+ * nobody covers them.
+ */
+export function effectiveMaxBet(
+  gameState: GameState,
+  players: Map<string, Player>,
+  player: Player,
+): number {
+  const playerBet = gameState.roundBets.get(player.id) || 0;
+  const ownMax = player.chips + playerBet;
+
+  let opponentMax = 0;
+  for (const id of gameState.playerOrder) {
+    if (id === player.id) continue;
+    const opponent = players.get(id);
+    if (!opponent || opponent.status === 'folded' || opponent.status === 'out') continue;
+    opponentMax = Math.max(opponentMax, opponent.chips + (gameState.roundBets.get(id) || 0));
+  }
+
+  // Never below what the player has already committed this street.
+  return Math.min(ownMax, Math.max(opponentMax, playerBet));
+}
+
+export function getValidActions(
+  gameState: GameState,
+  player: Player,
+  players: Map<string, Player>,
+): ActionType[] {
   const actions: ActionType[] = ['fold'];
 
   if (player.status !== 'active') {
@@ -101,6 +145,7 @@ export function getValidActions(gameState: GameState, player: Player): ActionTyp
 
   const playerBet = gameState.roundBets.get(player.id) || 0;
   const toCall = gameState.currentBet - playerBet;
+  const maxBet = effectiveMaxBet(gameState, players, player);
 
   if (toCall === 0) {
     actions.push('check');
@@ -110,7 +155,13 @@ export function getValidActions(gameState: GameState, player: Player): ActionTyp
     actions.push('call');
   }
 
-  if (player.chips > toCall) {
+  // A player who has already acted since the last full raise and is now facing
+  // a short all-in may only call or fold — an undersized all-in does not
+  // re-open the betting.
+  const canAggress = !(toCall > 0 && gameState.playersActed.has(player.id));
+
+  // Aggression needs room above the current bet that an opponent could match.
+  if (player.chips > toCall && canAggress && maxBet > gameState.currentBet) {
     if (gameState.currentBet === 0) {
       actions.push('bet');
     } else {
@@ -118,7 +169,10 @@ export function getValidActions(gameState: GameState, player: Player): ActionTyp
     }
   }
 
-  if (player.chips > 0) {
+  // Offer all-in only when it does something a call would not. Capped to the
+  // call amount (heads-up against a shorter all-in, or a stack too small to
+  // cover the bet), it *is* the call, so showing both is just noise.
+  if (player.chips > 0 && maxBet > gameState.currentBet) {
     actions.push('all-in');
   }
 
@@ -131,6 +185,63 @@ export interface ActionResult {
   roundComplete: boolean;
   handComplete: boolean;
   runout?: boolean; // All-in runout: more community cards to deal with delay
+}
+
+/**
+ * Move chips from a player's stack into the pot until their bet for this round
+ * reaches `targetTotal` (or their stack runs out, which puts them all-in).
+ * Returns the player's resulting total bet for the round.
+ */
+function commitTo(gameState: GameState, player: Player, targetTotal: number): number {
+  const playerBet = gameState.roundBets.get(player.id) || 0;
+  const added = Math.max(0, Math.min(targetTotal - playerBet, player.chips));
+
+  player.chips -= added;
+  player.bet += added;
+  gameState.pot += added;
+
+  const newTotal = playerBet + added;
+  gameState.roundBets.set(player.id, newTotal);
+  gameState.playerContributions.set(
+    player.id,
+    (gameState.playerContributions.get(player.id) || 0) + added,
+  );
+
+  if (player.chips === 0) {
+    player.status = 'all-in';
+  }
+
+  return newTotal;
+}
+
+/**
+ * Record a bet/raise/all-in that may have increased the bet to match.
+ *
+ * Only a *full* raise — one at least as large as the last raise increment —
+ * re-opens the betting for players who have already acted. A short all-in
+ * still raises the amount others must call, but players who already acted may
+ * only call or fold (enforced in `getValidActions`).
+ */
+function applyAggression(gameState: GameState, playerId: string, newTotal: number): void {
+  if (newTotal <= gameState.currentBet) {
+    // A call, or an all-in for less than the current bet: nothing re-opens.
+    return;
+  }
+
+  const increment = newTotal - gameState.currentBet;
+  const isFullRaise = increment >= gameState.lastRaiseSize;
+
+  gameState.currentBet = newTotal;
+  gameState.lastRaiser = playerId;
+
+  if (isFullRaise) {
+    gameState.lastRaiseSize = increment;
+    // Everyone still gets to respond to a full raise.
+    gameState.playersActed.clear();
+    gameState.playersActed.add(playerId);
+  }
+
+  gameState.minRaise = gameState.currentBet + gameState.lastRaiseSize;
 }
 
 export function processAction(
@@ -150,7 +261,8 @@ export function processAction(
     return { success: false, error: 'Not your turn', roundComplete: false, handComplete: false };
   }
 
-  const validActions = getValidActions(gameState, player);
+  const validActions = getValidActions(gameState, player, players);
+  const maxBet = effectiveMaxBet(gameState, players, player);
   if (!validActions.includes(action)) {
     return { success: false, error: 'Invalid action', roundComplete: false, handComplete: false };
   }
@@ -168,82 +280,40 @@ export function processAction(
       // No chip movement
       break;
 
-    case 'call': {
-      const playerBet = gameState.roundBets.get(playerId) || 0;
-      const toCall = gameState.currentBet - playerBet;
-      const callAmount = Math.min(toCall, player.chips);
-      player.chips -= callAmount;
-      player.bet += callAmount;
-      gameState.pot += callAmount;
-      gameState.roundBets.set(playerId, (gameState.roundBets.get(playerId) || 0) + callAmount);
-      gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + callAmount);
-      if (player.chips === 0) {
-        player.status = 'all-in';
-      }
+    case 'call':
+      commitTo(gameState, player, Math.min(gameState.currentBet, maxBet));
       break;
-    }
 
     case 'bet':
     case 'raise': {
       const playerBet = gameState.roundBets.get(playerId) || 0;
 
-      // For a bet (no current bet), minimum is bigBlind
-      // For a raise, minimum is double the current bet
+      // For a bet (no current bet) the minimum is one big blind.
+      // For a raise it is the current bet plus the last full raise increment.
       const minBetTotal = action === 'bet'
         ? gameState.bigBlind
-        : gameState.currentBet * 2;
+        : gameState.minRaise;
 
       // Amount is the total bet the player wants to make (not the raise amount)
-      const targetTotal = amount || minBetTotal;
+      // Anything above the effective stack is uncallable, so trim it.
+      const targetTotal = Math.min(amount || minBetTotal, maxBet);
 
-      // Validate minimum bet (allow if player doesn't have enough for min, they'd go all-in)
-      if (targetTotal < minBetTotal && targetTotal < player.chips + playerBet) {
+      // Below the minimum is only allowed when it is everything the player can
+      // usefully commit (their effective all-in).
+      if (targetTotal < minBetTotal && targetTotal < maxBet) {
         return { success: false, error: `Minimum raise is ${minBetTotal}`, roundComplete: false, handComplete: false };
       }
 
-      const amountToAdd = targetTotal - playerBet;
-      const actualAdd = Math.min(amountToAdd, player.chips);
-
-      player.chips -= actualAdd;
-      player.bet += actualAdd;
-      gameState.pot += actualAdd;
-
-      const newTotal = playerBet + actualAdd;
-      gameState.roundBets.set(playerId, newTotal);
-      gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + actualAdd);
-
-      if (player.chips === 0) {
-        player.status = 'all-in';
-      }
-
-      // Update minRaise for display purposes (the raise amount)
-      gameState.minRaise = newTotal;
-
-      gameState.currentBet = newTotal;
-
-      // Reset acted tracking - everyone needs to respond to the raise
-      gameState.playersActed.clear();
-      gameState.playersActed.add(playerId);
-      gameState.lastRaiser = playerId;
+      const newTotal = commitTo(gameState, player, targetTotal);
+      applyAggression(gameState, playerId, newTotal);
       break;
     }
 
     case 'all-in': {
-      const allInAmount = player.chips;
-      player.chips = 0;
-      player.bet += allInAmount;
-      player.status = 'all-in';
-      gameState.pot += allInAmount;
-      const newBet = (gameState.roundBets.get(playerId) || 0) + allInAmount;
-      gameState.roundBets.set(playerId, newBet);
-      gameState.playerContributions.set(playerId, (gameState.playerContributions.get(playerId) || 0) + allInAmount);
-      if (newBet > gameState.currentBet) {
-        gameState.currentBet = newBet;
-        // Reset acted tracking - everyone needs to respond to the raise
-        gameState.playersActed.clear();
-        gameState.playersActed.add(playerId);
-        gameState.lastRaiser = playerId;
-      }
+      // Commit up to the effective stack, not the whole stack: chips no
+      // opponent could match stay where they are.
+      const newTotal = commitTo(gameState, player, maxBet);
+      applyAggression(gameState, playerId, newTotal);
       break;
     }
   }
@@ -334,7 +404,9 @@ function advancePhase(gameState: GameState, players: Map<string, Player>): boole
   gameState.roundBets.clear();
   gameState.playersActed.clear();
   gameState.currentBet = 0;
-  gameState.minRaise = gameState.bigBlind; // Reset to big blind for new round
+  // New street: the bar for a raise resets to one big blind.
+  gameState.minRaise = gameState.bigBlind;
+  gameState.lastRaiseSize = gameState.bigBlind;
   gameState.lastRaiser = null;
 
   // Reset each player's bet for the new round
@@ -578,125 +650,147 @@ export function evaluateHand(cards: Card[], playerId: string = ''): HandResult {
   };
 }
 
-export function calculateSidePots(
+/** Build the pot-layer input from the hand's contribution ledger. */
+function toContributions(
   playerContributions: Map<string, number>,
   players: Map<string, Player>,
-): SidePotDTO[] {
-  // Collect contributions: all players who contributed (including folded)
-  const contributions: { playerId: string; amount: number; folded: boolean }[] = [];
+): Contribution[] {
+  const contributions: Contribution[] = [];
   for (const [playerId, amount] of playerContributions) {
     if (amount <= 0) continue;
     const player = players.get(playerId);
+    // A player who disconnected mid-hand is gone from the room but their chips
+    // stay in the pot, forfeited exactly like a fold.
     const folded = !player || player.status === 'folded';
     contributions.push({ playerId, amount, folded });
   }
 
-  if (contributions.length === 0) return [];
+  // Report eligibility in seat order so pots are stable and readable.
+  const seats = [...players.keys()];
+  const seatOf = (playerId: string) => {
+    const index = seats.indexOf(playerId);
+    return index === -1 ? seats.length : index;
+  };
+  contributions.sort((a, b) => seatOf(a.playerId) - seatOf(b.playerId));
 
-  // Get sorted unique contribution levels (the "layer breakpoints")
-  const levels = [...new Set(contributions.map(c => c.amount))].sort((a, b) => a - b);
-
-  const pots: SidePotDTO[] = [];
-  let previousLevel = 0;
-
-  for (const level of levels) {
-    const layerSize = level - previousLevel;
-    if (layerSize <= 0) continue;
-
-    // Count how many players contributed at least this level
-    const contributorsAtLevel = contributions.filter(c => c.amount >= level);
-    const potAmount = layerSize * contributorsAtLevel.length;
-
-    // Eligible players: non-folded who contributed at least this level
-    const eligible = contributorsAtLevel
-      .filter(c => !c.folded)
-      .map(c => c.playerId);
-
-    pots.push({ amount: potAmount, eligiblePlayerIds: eligible });
-    previousLevel = level;
-  }
-
-  // Merge consecutive pots with identical eligible players
-  const merged: SidePotDTO[] = [];
-  for (const pot of pots) {
-    const last = merged[merged.length - 1];
-    if (last && last.eligiblePlayerIds.length === pot.eligiblePlayerIds.length &&
-        last.eligiblePlayerIds.every(id => pot.eligiblePlayerIds.includes(id))) {
-      last.amount += pot.amount;
-    } else {
-      merged.push({ ...pot });
-    }
-  }
-
-  return merged;
+  return contributions;
 }
 
-export function determineWinners(gameState: GameState, players: Map<string, Player>): Winner[] {
-  const sidePots = calculateSidePots(gameState.playerContributions, players);
+/**
+ * Contributions from *completed* streets only.
+ *
+ * Chips bet on the current street sit in front of players until the street ends,
+ * so they are excluded here. Settled chips are always fully matched, which keeps
+ * the displayed pot breakdown stable for the whole street instead of re-slicing
+ * on every unmatched bet.
+ */
+export function settledContributions(gameState: GameState): Map<string, number> {
+  const settled = new Map<string, number>();
+  for (const [playerId, total] of gameState.playerContributions) {
+    settled.set(playerId, total - (gameState.roundBets.get(playerId) || 0));
+  }
+  return settled;
+}
 
-  // Evaluate each active player's hand once and cache
-  const handCache = new Map<string, HandResult>();
-  const activePlayers = getActivePlayers(gameState, players);
-  for (const player of activePlayers) {
-    const allCards = [...player.hand, ...gameState.communityCards];
-    handCache.set(player.id, evaluateHand(allCards, player.id));
+/**
+ * Pot breakdown for display while a hand is in progress.
+ * Uncalled chips are excluded — they are not part of any contested pot.
+ */
+export function calculateSidePots(
+  playerContributions: Map<string, number>,
+  players: Map<string, Player>,
+): SidePotDTO[] {
+  return buildPots(toContributions(playerContributions, players)).pots;
+}
+
+export interface HandResolution {
+  winners: Winner[];
+  sidePots: SidePotDTO[];
+  /** Per-pot outcome: amount, who could win it, and who did. */
+  potResults: PotResultDTO[];
+  refunds: RefundDTO[];
+  /** Total of the contested pots, i.e. the pot after uncalled chips are returned. */
+  contestedPot: number;
+}
+
+/**
+ * Resolve a finished hand into refunds and per-pot winners.
+ *
+ * This is the single resolution path for every ending: a showdown between any
+ * number of players, an all-in runout, or everyone folding to one player. The
+ * fold case needs no special handling — the survivor is simply the only
+ * eligible player in every pot.
+ */
+export function resolveHand(gameState: GameState, players: Map<string, Player>): HandResolution {
+  const { pots, refunds } = buildPots(toContributions(gameState.playerContributions, players));
+
+  // Evaluate hands once per player still in the hand.
+  const handResults = new Map<string, HandResult>();
+  const scores = new Map<string, number>();
+  const contenders = getActivePlayers(gameState, players);
+  const isShowdown = contenders.length > 1;
+
+  if (isShowdown) {
+    for (const player of contenders) {
+      const result = evaluateHand([...player.hand, ...gameState.communityCards], player.id);
+      handResults.set(player.id, result);
+      scores.set(player.id, result.score);
+    }
   }
 
-  // Aggregate winnings per player across all pots
-  const totalWinnings = new Map<string, number>();
-  const winnerHandResults = new Map<string, HandResult>();
+  const { winnings, results } = awardPots(pots, scores, gameState.playerOrder);
 
-  for (const pot of sidePots) {
-    const eligible = pot.eligiblePlayerIds.filter(id => handCache.has(id));
+  const emptyResult = (playerId: string): HandResult =>
+    ({ playerId, rank: 'high-card', cards: [], score: 0 });
 
-    if (eligible.length === 0) {
-      // No eligible player (shouldn't happen) — skip
-      continue;
-    }
-
-    if (eligible.length === 1) {
-      // Single eligible player: auto-award (uncalled bet return)
-      const winnerId = eligible[0];
-      totalWinnings.set(winnerId, (totalWinnings.get(winnerId) || 0) + pot.amount);
-      winnerHandResults.set(winnerId, handCache.get(winnerId)!);
-      continue;
-    }
-
-    // Find best hand among eligible
-    let bestScore = -1;
-    for (const id of eligible) {
-      const result = handCache.get(id)!;
-      if (result.score > bestScore) bestScore = result.score;
-    }
-
-    const potWinners = eligible.filter(id => handCache.get(id)!.score === bestScore);
-
-    // Split pot among tied winners, odd chip to first
-    const share = Math.floor(pot.amount / potWinners.length);
-    const remainder = pot.amount - share * potWinners.length;
-
-    for (let i = 0; i < potWinners.length; i++) {
-      const winnerId = potWinners[i];
-      const amount = share + (i === 0 ? remainder : 0);
-      totalWinnings.set(winnerId, (totalWinnings.get(winnerId) || 0) + amount);
-      winnerHandResults.set(winnerId, handCache.get(winnerId)!);
-    }
-  }
-
-  // Build Winner[] from aggregated winnings
   const winners: Winner[] = [];
-  for (const [playerId, amount] of totalWinnings) {
+  for (const [playerId, amount] of winnings) {
     winners.push({
       playerId,
       amount,
-      handResult: winnerHandResults.get(playerId)!,
+      handResult: handResults.get(playerId) ?? emptyResult(playerId),
     });
   }
 
   // Sort by amount descending for consistent display
   winners.sort((a, b) => b.amount - a.amount);
 
-  return winners;
+  return {
+    winners,
+    sidePots: pots,
+    potResults: pots.map((pot, i) => ({
+      amount: pot.amount,
+      eligiblePlayerIds: pot.eligiblePlayerIds,
+      winnerIds: results[i]?.winnerIds ?? [],
+    })),
+    refunds: [...refunds].map(([playerId, amount]) => ({ playerId, amount })),
+    contestedPot: pots.reduce((sum, pot) => sum + pot.amount, 0),
+  };
+}
+
+/**
+ * Resolve a hand and move the chips: uncalled contributions go back to the
+ * player who bet them, then each pot is paid to its winner(s).
+ */
+export function settleHand(gameState: GameState, players: Map<string, Player>): HandResolution {
+  const resolution = resolveHand(gameState, players);
+
+  for (const { playerId, amount } of resolution.refunds) {
+    const player = players.get(playerId);
+    if (player) player.chips += amount;
+  }
+
+  for (const { playerId, amount } of resolution.winners) {
+    const player = players.get(playerId);
+    if (player) player.chips += amount;
+  }
+
+  return resolution;
+}
+
+/** Winners only, for callers that do not need refunds or the pot breakdown. */
+export function determineWinners(gameState: GameState, players: Map<string, Player>): Winner[] {
+  return resolveHand(gameState, players).winners;
 }
 
 export function startNextHand(room: Room, previousDealerIndex: number): GameState | null {
@@ -764,7 +858,8 @@ export function startNextHand(room: Room, previousDealerIndex: number): GameStat
     communityCards: [],
     pot: 0,
     currentBet: room.bigBlind,
-    minRaise: room.bigBlind,
+    minRaise: room.bigBlind * 2,
+    lastRaiseSize: room.bigBlind,
     bigBlind: room.bigBlind,
     currentPlayerIndex: firstToActIndex,
     dealerIndex,
@@ -777,22 +872,8 @@ export function startNextHand(room: Room, previousDealerIndex: number): GameStat
   };
 
   // Post blinds
-  const sbPlayer = players.get(playerOrder[smallBlindIndex])!;
-  const bbPlayer = players.get(playerOrder[bigBlindIndex])!;
-
-  const sbAmount = Math.min(sbPlayer.chips, room.smallBlind);
-  sbPlayer.chips -= sbAmount;
-  sbPlayer.bet = sbAmount;
-  gameState.roundBets.set(sbPlayer.id, sbAmount);
-  gameState.playerContributions.set(sbPlayer.id, sbAmount);
-  gameState.pot += sbAmount;
-
-  const bbAmount = Math.min(bbPlayer.chips, room.bigBlind);
-  bbPlayer.chips -= bbAmount;
-  bbPlayer.bet = bbAmount;
-  gameState.roundBets.set(bbPlayer.id, bbAmount);
-  gameState.playerContributions.set(bbPlayer.id, bbAmount);
-  gameState.pot += bbAmount;
+  postBlind(gameState, players.get(playerOrder[smallBlindIndex])!, room.smallBlind);
+  postBlind(gameState, players.get(playerOrder[bigBlindIndex])!, room.bigBlind);
 
   return gameState;
 }

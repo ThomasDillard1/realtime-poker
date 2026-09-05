@@ -1,7 +1,7 @@
 import { WebSocketServer as WSServer, WebSocket } from 'ws';
 import { ClientMessage, ServerMessage, Player, PlayerDTO, RoomDTO, GameStateDTO, Room, PlayerAction, ShowdownPlayerDTO, HandCompletePayload, ActionType } from '../types/index.js';
 import { gameManager } from '../game/GameManager.js';
-import { startGame, getValidActions, processAction, getActivePlayers, determineWinners, startNextHand, advanceRunoutPhase, calculateSidePots } from '../game/GameEngine.js';
+import { startGame, getValidActions, processAction, getActivePlayers, settleHand, startNextHand, advanceRunoutPhase, calculateSidePots, settledContributions, effectiveMaxBet } from '../game/GameEngine.js';
 
 interface ClientConnection {
   ws: WebSocket;
@@ -673,7 +673,11 @@ export class WebSocketHandler {
     const gameState = room.gameState!;
     const currentPlayerId = gameState.playerOrder[gameState.currentPlayerIndex];
     const player = room.players.get(forPlayerId);
-    const sidePots = calculateSidePots(gameState.playerContributions, room.players);
+    // Chips bet on the current street stay in front of players until the street
+    // ends, so both the headline pot and the breakdown use settled chips only.
+    const settled = settledContributions(gameState);
+    const settledPot = [...settled.values()].reduce((sum, amount) => sum + amount, 0);
+    const sidePots = calculateSidePots(settled, room.players);
 
     // Reveal all hands immediately when all remaining players are all-in
     const remainingPlayers = getActivePlayers(gameState, room.players);
@@ -687,12 +691,18 @@ export class WebSocketHandler {
       phase: gameState.phase,
       communityCards: gameState.communityCards,
       pot: gameState.pot,
+      settledPot,
       sidePots,
       currentBet: gameState.currentBet,
       minRaise: gameState.minRaise,
       bigBlind: gameState.bigBlind,
       currentPlayerId,
       players: Array.from(room.players.values()).map((p) => this.toPlayerDTO(p)),
+      // The most this client can usefully bet — chips beyond the deepest
+      // opponent's reach are uncallable, so the slider must not offer them.
+      myMaxBet: player && player.status === 'active'
+        ? effectiveMaxBet(gameState, room.players, player)
+        : 0,
       myCards: player?.hand,
       revealedHands,
     };
@@ -819,7 +829,7 @@ export class WebSocketHandler {
       return;
     }
 
-    const validActions = getValidActions(room.gameState, currentPlayer);
+    const validActions = getValidActions(room.gameState, currentPlayer, room.players);
 
     // Start timer and get deadline
     const turnDeadline = this.startActionTimer(room.id, currentPlayerId, validActions);
@@ -861,27 +871,11 @@ export class WebSocketHandler {
 
     const activePlayers = getActivePlayers(room.gameState, room.players);
     const isShowdown = activePlayers.length > 1;
-    let winners;
-    let sidePots = calculateSidePots(room.gameState.playerContributions, room.players);
 
-    if (!isShowdown) {
-      const winner = activePlayers[0];
-      winners = [{
-        playerId: winner.id,
-        amount: room.gameState.pot,
-        handResult: { playerId: winner.id, rank: 'high-card' as const, cards: [], score: 0 },
-      }];
-    } else {
-      winners = determineWinners(room.gameState, room.players);
-    }
-
-    // Award chips to winners
-    for (const winner of winners) {
-      const player = room.players.get(winner.playerId);
-      if (player) {
-        player.chips += winner.amount;
-      }
-    }
+    // One resolution path for every ending: showdown, all-in runout, or
+    // everyone folding to a single player.
+    // Returns uncalled chips and pays out every pot.
+    const { winners, sidePots, potResults, refunds, contestedPot } = settleHand(room.gameState, room.players);
 
     // Determine which players reveal their cards at showdown.
     const revealPlayerIds = new Set<string>();
@@ -945,8 +939,9 @@ export class WebSocketHandler {
         this.toShowdownPlayerDTO(p, isShowdown && revealPlayerIds.has(p.id))
       ),
       communityCards: room.gameState.communityCards,
-      pot: room.gameState.pot,
-      sidePots,
+      pot: contestedPot,
+      potResults,
+      refunds,
       isShowdown,
     };
 
